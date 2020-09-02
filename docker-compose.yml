@@ -1,0 +1,17 @@
+version: '2'
+services:
+  
+  redis:
+    image: redis:alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    hostname: redis
+    volumes:
+      - $PWD/data/redis:/data
+
+  # postgis:
+  #   image: "mdillon/postgis"
+  #   environment:
+  #     - POSTGRES_USER=momentumpostgis
+  #     - POSTGRES_PASSWORD=momentumpostgis
+  #   ports:
+  #     - "5432:5432"
