@@ -1,1 +1,1 @@
-export * from './algorithm-start.event';
+export * from './algorithm-start.event'

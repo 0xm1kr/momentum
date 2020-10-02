@@ -2,72 +2,83 @@ import { Body, Controller, Delete, Get, Inject, Param, Post } from '@nestjs/comm
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis';
 import { ClientProxy } from '@nestjs/microservices';
-import { ExchangeSubscriberService } from './provider/exchange-subscriber.service';
 import { AlgorithmStartEvent } from '@momentum/events'
 
 @Controller()
 export class AppController {
   constructor(
     @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
-    private readonly redisSvc: RedisService,
-    private readonly esSvc: ExchangeSubscriberService
+    private readonly redisSvc: RedisService
   ) {}
 
   private redis: Redis
 
   async onApplicationBootstrap() {
     // connect to store
-    this.redis = await this.redisSvc.getClient('momentum')
-    // emit timeintervals
-    setInterval(() => this.momentum.emit('interval:1m', {}), 60 * 1000)
-    setInterval(() => this.momentum.emit('interval:5m', {}), 60 * 1000 * 5)
-    setInterval(() => this.momentum.emit('interval:15m', {}), 60 * 1000 * 15)
+    this.redis = await this.redisSvc.getClient('momentum-state')
+
+    // DEV ONLY
+    await this.redis.flushall()
   }
 
   @Get('/subscriptions')
   async getSubscriptions() {
-    return await this.redis.smembers('coinbase:subscriptions')
+    const keys = await this.redis.keys('subscriptions:*')
+
+    return Promise.all(
+      keys.map(async (k: string) => {
+        const params = k.split(':')
+        return {
+          exchange: params[1],
+          pairs: await this.redis.smembers(k)
+        }
+      })
+    )
   }
 
-  // TODO POST
   @Post('/subscriptions')
   async createSubscription(@Body() createSub: {
-    productId: string
+    exchange: string
+    pair: string
   }) {
-
-    // add subscription
-    await this.redis.sadd('coinbase:subscriptions', createSub.productId)
-    const cbSubs = await this.redis.smembers('coinbase:subscriptions')
-    this.esSvc.subscribe(cbSubs)
+    this.momentum.emit('subscribe', createSub)
 
     return {
-      subscriptions: cbSubs
+      message: `Subscribing to ${createSub.exchange}:${createSub.pair}`
     }
   }
 
   @Delete('/subscriptions')
   async delSubscription(@Body() delSub: {
-    productId: string
+    exchange: string
+    pair: string
   }) {
-    this.esSvc.unsubscribe([delSub.productId])
-    await this.redis.srem('coinbase:subscriptions', delSub.productId)
-    const cbSubs = await this.redis.smembers('coinbase:subscriptions')
+    this.momentum.emit('unsubscribe', delSub)
 
     return {
-      message: 'Successfully unsubscribed',
-      subscriptions: cbSubs
+      message: `Unsubscribing from ${delSub.exchange}:${delSub.pair}`
     }
   }
 
   @Get('/algorithms')
   async getAlgos() {
-    const algos = await this.redis.smembers('algorithms:coinbase')
-    return algos
+    const keys = await this.redis.keys('algorithms:*')
+
+    return Promise.all(
+      keys.map(async (k: string) => {
+        const params = k.split(':')
+        return {
+          exchange: params[1],
+          algorithm: params[2],
+          pairs: await this.redis.smembers(k)
+        }
+      })
+    )
   }
 
   @Get('/algorithms/:algo')
   async getAlgorithm(@Param() params) {
-    const keys = await this.redis.keys(`algorithm:${params.algo}:*`)
+    const keys = await this.redis.keys(`algorithms:${params.algo}:*`)
     return await Promise.all(
       keys.map(async (k) => {
         const res = JSON.parse(await this.redis.get(k))
@@ -78,7 +89,7 @@ export class AppController {
     )
   }
 
-  @Post('/algorithms/:algo')
+  @Post('/algorithms')
   async createAlgo(@Param() params, @Body() createAlgorithm: AlgorithmStartEvent) {
 
     await this.redis.sadd('algorithms:coinbase', params.algo)
@@ -86,7 +97,7 @@ export class AppController {
     await this.momentum.emit(
       `start:${params.algo}`,
       new AlgorithmStartEvent(
-        createAlgorithm.productId, 
+        createAlgorithm.pair, 
         createAlgorithm.size, 
         createAlgorithm.lastTrade
       )

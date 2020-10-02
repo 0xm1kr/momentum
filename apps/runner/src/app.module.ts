@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common'
 import { RedisModule} from 'nestjs-redis'
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config'
 import { CoinbaseModule } from '@momentum/coinbase'
 import { AppController } from './app.controller'
 
@@ -10,7 +10,7 @@ import { AppController } from './app.controller'
     ConfigModule.forRoot(),
     // Redis as a simple DB service
     RedisModule.register({
-      name: 'momentum',
+      name: 'momentum-state',
       url: 'redis://localhost:6379/1',
       keyPrefix: 'mmtm'
     }),

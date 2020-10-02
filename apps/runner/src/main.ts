@@ -1,6 +1,6 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
-import { Transport, MicroserviceOptions } from '@nestjs/microservices';
+import { NestFactory } from '@nestjs/core'
+import { AppModule } from './app.module'
+import { Transport, MicroserviceOptions } from '@nestjs/microservices'
 
 async function bootstrap() {
   // Create redis transport
@@ -10,8 +10,13 @@ async function bootstrap() {
       url: 'redis://localhost:6379',
       db: '0'
     }
-  });
+  })
   
-  app.listen(() => console.log('Momentum Connection Established'));
+  app.listen(
+    () => {
+      console.log('')
+      console.log('👟👟👟👟 Momentum Runner Activated 👟👟👟👟')
+    }
+  )
 }
-bootstrap();
+bootstrap()

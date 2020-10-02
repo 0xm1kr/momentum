@@ -1,12 +1,21 @@
-import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service';
+import { Controller, Get } from '@nestjs/common'
+import { EventPattern } from '@nestjs/microservices'
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  @EventPattern('clock:1s')
+  async handleOneSec(data: any) {
+    console.log(data)
+  }
+
+  @EventPattern('clock:1m')
+  async handleOneMin(data: any) {
+    console.log(data)
+  }
+
+  @EventPattern('trade')
+  async handleTrade(data: any) {
+    console.log(data)
   }
 }

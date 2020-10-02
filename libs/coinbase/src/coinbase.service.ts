@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common'
 import {
   CoinbasePro,
   Account,
@@ -240,11 +240,11 @@ export class CoinbaseService {
       // on error
       this.client.ws.on(WebSocketEvent.ON_ERROR, (e) => {
         console.log('ON_ERROR', e)
-        throw new Error(e.message);
+        throw new Error(e.message)
       })
       this.client.ws.on(WebSocketEvent.ON_MESSAGE_ERROR, (e) => {
         console.log('ON_MESSAGE_ERROR', e)
-        throw new Error(e.message);
+        throw new Error(e.message)
       })
 
       // changes to subscriptions
@@ -255,6 +255,8 @@ export class CoinbaseService {
           this.client.ws.disconnect()
         }
         this.channels = subscriptions.channels
+
+        // TODO callback?
       })
 
       // open connection
@@ -274,7 +276,6 @@ export class CoinbaseService {
       name: s,
       product_ids: subscriptions[s].map(sId => (sId.productId))
     })) as WebSocketChannel[]
-    console.log(channels)
     this.client.ws.unsubscribe(channels)
   }
 
@@ -282,13 +283,9 @@ export class CoinbaseService {
    * Synchronize a product 
    * orderbook in memory
    * 
-   * @param productId 
-   * @param callback 
+   * @param productId
    */
-  public syncBook(
-    productId: string, 
-    callback: (productId: string, bestBid: number[], bestAsk: number[]) => void
-  ): void {
+  public syncBook(productId: string): void {
     if (!this.bids[productId]) {
       this.bids[productId] = new RBTree(
         (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
@@ -348,11 +345,6 @@ export class CoinbaseService {
               }
             }
           }
-
-          // return best bid/ask
-          const bestBid = this.getBestBid(productId)
-          const bestAsk = this.getBestAsk(productId)
-          callback(productId, bestBid, bestAsk)
         }
       }]
     })

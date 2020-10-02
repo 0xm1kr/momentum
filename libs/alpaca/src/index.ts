@@ -1,2 +1,2 @@
-export * from './alpaca.module';
-export * from './alpaca.service';
+export * from './alpaca.module'
+export * from './alpaca.service'

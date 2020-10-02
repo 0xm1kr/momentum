@@ -1,11 +1,8 @@
-import { Module } from '@nestjs/common';
-import { Transport, ClientsModule } from '@nestjs/microservices';
+import { Module } from '@nestjs/common'
+import { Transport, ClientsModule } from '@nestjs/microservices'
 import { RedisModule} from 'nestjs-redis'
-import { ConfigModule } from '@nestjs/config';
-import { CoinbaseModule } from '@momentum/coinbase';
-import { AlpacaModule } from '@momentum/alpaca';
-import { ExchangeSubscriberService } from './provider/exchange-subscriber.service';
-import { AppController } from './app.controller';
+import { ConfigModule } from '@nestjs/config'
+import { AppController } from './app.controller'
 
 @Module({
   imports: [
@@ -24,18 +21,12 @@ import { AppController } from './app.controller';
     ]),
     // Redis as a simple DB service
     RedisModule.register({
-      name: 'momentum',
+      name: 'momentum-state',
       url: 'redis://localhost:6379/1',
       keyPrefix: 'mmtm'
-    }),
-    // Coinbase
-    CoinbaseModule,
-    // Alpaca
-    AlpacaModule
+    })
   ],
-  providers: [
-    ExchangeSubscriberService
-  ],
+  providers: [],
   controllers: [
     AppController
   ]

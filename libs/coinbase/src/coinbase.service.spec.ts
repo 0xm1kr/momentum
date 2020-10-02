@@ -1,18 +1,18 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { CoinbaseService } from './coinbase.service';
+import { Test, TestingModule } from '@nestjs/testing'
+import { CoinbaseService } from './coinbase.service'
 
 describe('CoinbaseService', () => {
-  let service: CoinbaseService;
+  let service: CoinbaseService
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [CoinbaseService],
-    }).compile();
+    }).compile()
 
-    service = module.get<CoinbaseService>(CoinbaseService);
-  });
+    service = module.get<CoinbaseService>(CoinbaseService)
+  })
 
   it('should be defined', () => {
-    expect(service).toBeDefined();
-  });
-});
+    expect(service).toBeDefined()
+  })
+})

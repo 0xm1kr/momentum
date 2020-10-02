@@ -1,5 +1,5 @@
-import { Module } from '@nestjs/common';
-import { AlpacaService } from './alpaca.service';
+import { Module } from '@nestjs/common'
+import { AlpacaService } from './alpaca.service'
 
 @Module({
   providers: [AlpacaService],

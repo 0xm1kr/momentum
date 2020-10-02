@@ -1,12 +1,12 @@
-import { Controller } from '@nestjs/common';
-import { EventPattern } from '@nestjs/microservices';
+import { Controller } from '@nestjs/common'
+import { EventPattern } from '@nestjs/microservices'
 import { RedisService } from 'nestjs-redis'
-import { Redis } from 'ioredis';
-import { ema } from 'moving-averages';
+import { Redis } from 'ioredis'
+import { ema } from 'moving-averages'
 import { OrderSide } from 'coinbase-pro-node'
 import bn from 'big.js'
-import { AlgorithmStartEvent } from '@momentum/events';
-import { CoinbaseService, WebSocketTickerMessage } from '@momentum/coinbase';
+import { AlgorithmStartEvent } from '@momentum/events'
+import { CoinbaseService, WebSocketTickerMessage } from '@momentum/coinbase'
 
 @Controller()
 export class AppController {
@@ -22,21 +22,41 @@ export class AppController {
     private ema12 = []
     private ema26 = []
     private runInterval = null
-    private productId = null
+    private pair = null
     private startTime = null
     private period = null
     private size = null
 
     async onApplicationBootstrap() {
         // connect to store
-        this.redis = await this.redisSvc.getClient('momentum')
+        this.redis = await this.redisSvc.getClient('momentum-state')
+
+        // check for running algos
+        const algos = await this.redis.keys('algorithms:*')
+        if (algos.length) {
+            // 1. get candles up to speed
+            // 2. calculate emas
+            // 3. set active flags
+        }
     }
+
+    @EventPattern('clock:1s')
+    async handleOneSec(data: any) {
+        // console.log(data)
+    }
+
+    @EventPattern('clock:1m')
+    async handleOneMin(data: any) {
+        console.log(data)
+    }
+
+    // ----------- TODO deprecated ------------
 
     @EventPattern('stop:ema1226')
     async handleStop() {
-        console.log('stopping', this.productId)
+        console.log('stopping', this.pair)
         clearInterval(this.runInterval)
-        this.productId = null
+        this.pair = null
         this.ema12 = []
         this.ema26 = []
         this.pricePeriods = []
@@ -49,7 +69,7 @@ export class AppController {
         }
 
         // TODO more than one product
-        this.productId = data.productId
+        this.pair = data.pair
         this.period = data.period
         this.startTime = new Date().getTime()
         this.size = data.size
@@ -86,15 +106,15 @@ export class AppController {
         console.log([lastBuy, lastSell])
 
         // backfill price data
-        const candles = await this.cbService.getCandles(data.productId, data.period / 1000)
+        const candles = await this.cbService.getCandles(data.pair, data.period / 1000)
         this.pricePeriods = candles.map(c => (c.close))
 
         // run trade logic every second
         this.runInterval = setInterval(async () => {
 
             if (this.ema26.length) {
-                const bestAsk = await this.redis.get(`coinbase:best-ask:${data.productId}`)
-                const bestBid = await this.redis.get(`coinbase:best-bid:${data.productId}`)
+                const bestAsk = await this.redis.get(`coinbase:best-ask:${data.pair}`)
+                const bestBid = await this.redis.get(`coinbase:best-bid:${data.pair}`)
                 const ema12 = bn(this.ema12[this.ema12.length - 1])
                 const ema26 = bn(this.ema26[this.ema26.length - 1])
                 const ema12Slope = bn(this.ema12[this.ema12.length - 1]).minus(bn(this.ema12[this.ema12.length - 2]))
@@ -129,7 +149,7 @@ export class AppController {
                             price: bestAsk[0]
                         }
                         try {
-                            // const o = await this.cbService.limitOrder(data.productId, order)
+                            // const o = await this.cbService.limitOrder(data.pair, order)
                             // console.log(o)
                             console.log(order)
                             lastSell = {
@@ -164,7 +184,7 @@ export class AppController {
                             price: bestBid[0]
                         }
                         try {
-                            // const o = await this.cbService.limitOrder(data.productId, order)
+                            // const o = await this.cbService.limitOrder(data.pair, order)
                             // console.log(o)
                             console.log(order)
                             lastBuy = {
@@ -185,20 +205,20 @@ export class AppController {
 
     @EventPattern('coinbase:ticker')
     async handleCoinbaseTickerEvent(data: WebSocketTickerMessage) {
-        const productId = data.product_id
+        const pair = data.product_id
         const price = data.price
-        console.log('coinbase:ticker', productId, price, data.side)
+        console.log('coinbase:ticker', pair, price, data.side)
 
-        if (!this.prices[productId]) {
-            this.prices[productId] = []
+        if (!this.prices[pair]) {
+            this.prices[pair] = []
         }
 
-        this.prices[productId].push(Number(price))
+        this.prices[pair].push(Number(price))
     }
 
     @EventPattern('alpaca:ticker')
     async handleAlpacaBookEvent(data: Record<string, unknown>) {
-        console.log(data);
+        console.log(data)
     }
 
     /**
@@ -209,7 +229,7 @@ export class AppController {
     @EventPattern('interval:1m')
     async calc1mMovingAverage(): Promise<void> {
         console.log('interval:1m')
-        if (!this.productId) return
+        if (!this.pair) return
 
         // --- calculate moving averages ---
         if (this.pricePeriods.length >= 26) {
@@ -222,15 +242,15 @@ export class AppController {
         console.log(`calculating period: ${tPeriods}`)
 
         // prices
-        if (this.prices[this.productId].length) {
+        if (this.prices[this.pair].length) {
             this.pricePeriods.push(
-                (this.prices[this.productId].reduce((sum, s) => {
+                (this.prices[this.pair].reduce((sum, s) => {
                     return sum += (s || 0)
-                }) / this.prices[this.productId].length)
+                }) / this.prices[this.pair].length)
             )
             // logInfo('Prices: ' + JSON.stringify(this.pricePeriods))
         }
-        this.prices[this.productId] = []
+        this.prices[this.pair] = []
 
         // calculate moving averages
         if (this.pricePeriods.length >= 26) {
@@ -238,8 +258,8 @@ export class AppController {
             this.ema26 = ema(this.pricePeriods, 26)
             // shift one off
             this.pricePeriods.shift()
-            this.redis.set(`algorithm:ema1226:12:${this.productId}`, JSON.stringify(this.ema12))
-            this.redis.set(`algorithm:ema1226:26:${this.productId}`, JSON.stringify(this.ema26))
+            this.redis.set(`algorithm:ema1226:12:${this.pair}`, JSON.stringify(this.ema12))
+            this.redis.set(`algorithm:ema1226:26:${this.pair}`, JSON.stringify(this.ema26))
         }
     }
 }
