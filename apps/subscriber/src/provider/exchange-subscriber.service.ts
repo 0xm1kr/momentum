@@ -1,25 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ClientProxy } from '@nestjs/microservices'
 import bn from 'big.js'
-import { ClockService, ClockIntervalText, ClockInterval } from './clock.service'
 import {
   CoinbaseService,
   WebSocketChannelName,
   WebSocketTickerMessage,
 } from '@momentum/coinbase'
-
-export type ClockEvent = {
-  exchange: string
-  pair: string
-  interval: ClockIntervalText
-  bestBid: string
-  bestAsk: string
-  avgTradePrice: string
-  avgTradeSize?: string
-  avgBidDepth?: string
-  avgAskDepth?: string
-  time: number
-};
+import { ClockEvent } from '@momentum/events/clock.event'
+import { 
+  ClockService, 
+  ClockIntervalText, 
+  ClockInterval
+} from './clock.service'
 
 type Tickers = WebSocketTickerMessage[] // | AlpacaTickerMessage
 type PairTickers = Record<string, Tickers>
@@ -103,16 +95,14 @@ export class ExchangeSubscriberService {
     const priceSum = tickers?.reduce<bn>((t, {price}) => bn(t).plus(price), bn('0'))
     const avgTradePrice = priceSum.gt(0) ? priceSum.div(tickers.length)?.toString() : null
 
-    const ev: ClockEvent = {
+    const ev = new ClockEvent(
       interval,
       exchange,
       pair,
-      bestBid: this.coinbaseSvc.getBestBid(pair),
-      bestAsk: this.coinbaseSvc.getBestAsk(pair),
-      avgTradePrice,
-      time: now 
-      // avgTradeSize: string
-    }
+      this.coinbaseSvc.getBestBid(pair),
+      this.coinbaseSvc.getBestAsk(pair),
+      avgTradePrice
+    )
 
     // tell our app what's up
     this.momentum.emit(`clock:${interval}`, ev)

@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common'
 import { RedisModule} from 'nestjs-redis'
 import { ConfigModule } from '@nestjs/config'
 import { CoinbaseModule } from '@momentum/coinbase'
-import { AppController } from './app.controller'
+import { EMA1226Controller } from './ema1226.controller'
 
 @Module({
   imports: [
@@ -18,7 +18,7 @@ import { AppController } from './app.controller'
     CoinbaseModule
   ],
   controllers: [
-    AppController
+    EMA1226Controller
   ],
   providers: [],
 })
