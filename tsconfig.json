@@ -10,6 +10,26 @@
     "sourceMap": true,
     "outDir": "./dist",
     "baseUrl": "./",
-    "incremental": true
+    "incremental": true,
+    "paths": {
+      "@momentum/coinbase": [
+        "libs/coinbase/src"
+      ],
+      "@momentum/coinbase/*": [
+        "libs/coinbase/src/*"
+      ],
+      "@momentum/alpaca": [
+        "libs/alpaca/src"
+      ],
+      "@momentum/alpaca/*": [
+        "libs/alpaca/src/*"
+      ],
+      "@momentum/events": [
+        "libs/events/src"
+      ],
+      "@momentum/events/*": [
+        "libs/events/src/*"
+      ]
+    }
   }
 }

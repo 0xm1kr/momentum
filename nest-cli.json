@@ -1,4 +1,75 @@
 {
   "collection": "@nestjs/schematics",
-  "sourceRoot": "src"
+  "sourceRoot": "apps/gateway/src",
+  "monorepo": true,
+  "root": "apps/gateway",
+  "compilerOptions": {
+    "webpack": true,
+    "tsConfigPath": "apps/gateway/tsconfig.app.json"
+  },
+  "projects": {
+    "gateway": {
+      "type": "application",
+      "root": "apps/gateway",
+      "entryFile": "main",
+      "sourceRoot": "apps/gateway/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/gateway/tsconfig.app.json"
+      }
+    },
+    "subscriber": {
+      "type": "application",
+      "root": "apps/subscriber",
+      "entryFile": "main",
+      "sourceRoot": "apps/subscriber/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/subscriber/tsconfig.app.json"
+      }
+    },
+    "runner": {
+      "type": "application",
+      "root": "apps/runner",
+      "entryFile": "main",
+      "sourceRoot": "apps/runner/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/runner/tsconfig.app.json"
+      }
+    },
+    "analyzer": {
+      "type": "application",
+      "root": "apps/analyzer",
+      "entryFile": "main",
+      "sourceRoot": "apps/analyzer/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/analyzer/tsconfig.app.json"
+      }
+    },
+    "coinbase": {
+      "type": "library",
+      "root": "libs/coinbase",
+      "entryFile": "index",
+      "sourceRoot": "libs/coinbase/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/coinbase/tsconfig.lib.json"
+      }
+    },
+    "alpaca": {
+      "type": "library",
+      "root": "libs/alpaca",
+      "entryFile": "index",
+      "sourceRoot": "libs/alpaca/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/alpaca/tsconfig.lib.json"
+      }
+    },
+    "events": {
+      "type": "library",
+      "root": "libs/events",
+      "entryFile": "index",
+      "sourceRoot": "libs/events/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/events/tsconfig.lib.json"
+      }
+    }
+  }
 }
