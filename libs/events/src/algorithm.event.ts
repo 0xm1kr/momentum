@@ -1,8 +1,10 @@
-export class AlgorithmStartEvent {
+import { ClockIntervalText } from './clock.event'
+
+export class AlgorithmEvent {
     algorithm: string
     pair: string
     exchange: string
-    period: number
+    period: ClockIntervalText
     size: string
     lastTrade: string
 
@@ -16,9 +18,17 @@ export class AlgorithmStartEvent {
      * @param algorithm 
      * @param period 
      */
-    constructor(pair, size = '1', lastTrade = '', exchange = 'coinbase', period = 60 * 1000) {
-        this.pair = pair
+    constructor(
+        algorithm,
+        exchange,
+        pair,
+        size = '1',
+        period = ClockIntervalText.OneMinute,
+        lastTrade = ''
+    ) {
+        this.algorithm = algorithm
         this.exchange = exchange
+        this.pair = pair
         this.period = period
         this.size = size
         this.lastTrade = lastTrade

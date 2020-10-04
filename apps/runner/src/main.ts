@@ -11,6 +11,9 @@ async function bootstrap() {
       db: '0'
     }
   })
+
+  // enable shutdown hook
+  app.enableShutdownHooks();
   
   app.listen(
     () => {

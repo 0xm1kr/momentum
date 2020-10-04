@@ -1,27 +1,45 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ClientProxy } from '@nestjs/microservices'
+import { filter, throttle } from 'rxjs/operators'
 import bn from 'big.js'
 import {
   Observable,
   CoinbaseService,
-  CoinbaseSubscriptions,
-  WebSocketChannelName,
-  WebSocketTickerMessage
+  CoinbaseSubscription
 } from '@momentum/coinbase'
 import { ClockEvent } from '@momentum/events/clock.event'
-import { 
-  ClockService, 
-  ClockIntervalText, 
+import {
+  ClockService,
+  ClockIntervalText,
   ClockInterval
 } from './clock.service'
+import { interval } from 'rxjs'
 
-type Tickers = WebSocketTickerMessage[] // | AlpacaTickerMessage
-type PairTickers = Record<string, Tickers>
-type ExchangeTickers = Record<string, PairTickers>
+export type ExchangeSubscription = Observable<CoinbaseSubscription> // | Observable<AlpacaSubscription>
+export type Subscription = Record<string, ExchangeSubscription>
+export type ExchangeSubscriptions = Record<string, Subscription>
 
-type TickerTimes = number[]
-type PairTickerTimes = Record<string, TickerTimes>
-type ExchangeTickerTimes = Record<string, PairTickerTimes>
+export type Trade = {
+  id: string
+  price: string
+  size: string
+  timestamp: number // unix
+  side: string
+}
+export type SubscriptionUpdate = {
+  pair: string
+  bestBid: string[]
+  bestAsk: string[]
+  bidLiquidity?: string
+  askLiquidity?: string
+  lastTrade: Trade
+  timestamp: number // unix
+}
+export type SupscriptionUpdates = Record<string, SubscriptionUpdate[]>
+export type ExchangeSubscriptionUpdates = Record<string, SupscriptionUpdates>
+
+export type SubscriptionUpdateTimes = Record<string, number[]>
+export type ExchangeSubscriptionUpdateTimes = Record<string, SubscriptionUpdateTimes>
 
 @Injectable()
 export class ExchangeSubscriberService {
@@ -30,69 +48,85 @@ export class ExchangeSubscriberService {
     private readonly coinbaseSvc: CoinbaseService,
     private readonly clockSvc: ClockService
   ) { }
-  
-  private cbSubscriptions: Observable<CoinbaseSubscriptions>
-  private tickers: ExchangeTickers = {}
-  private tickerTimes: ExchangeTickerTimes = {}
+
+  private subscriptions: ExchangeSubscriptions = {
+    coinbase: {},
+    alpaca: {}
+  }
+  private updateTimes: ExchangeSubscriptionUpdateTimes = {
+    coinbase: {},
+    alpaca: {}
+  }
+  private updates: ExchangeSubscriptionUpdates = {
+    coinbase: {},
+    alpaca: {}
+  }
 
   async onApplicationBootstrap() {
     // connect to momentum pubsub
-    await this.momentum.connect();
-
-    // listen to coinbase subscriptions
-    this.cbSubscriptions = await this.coinbaseSvc.subscriptions
-    this.cbSubscriptions.subscribe(console.log, console.error)
-
-    // listen to alpaca subscriptions
-    // TODO
+    await this.momentum.connect()
   }
 
   /**
-   * Subscribe to pairs
+   * Subscribe to pair
    * 
    * @param subscriptions 
    * @param exchange 
    */
-  async subscribe(subscriptions: string[], exchange = 'coinbase') {
-    // get subscriptions
-    if (!subscriptions.length) {
-      throw new Error('at least one pair is required to subscribe')
+  async subscribe(pair: string, exchange = 'coinbase'): Promise<ExchangeSubscription> {
+    if (typeof this.subscriptions[exchange] === 'undefined') {
+      this.subscriptions[exchange] = {}
     }
 
+    // subscribe to exchange
     switch (exchange) {
       case 'coinbase':
-        this._subscribeToCoinbasePairs(subscriptions)
-        break
+        await this._subscribeToCoinbasePair(pair)
       case 'alpaca':
-        // TODO
+        await this._subscribeToAlpacaPair(pair)
         break
       default:
         throw new Error('invalid exchange')
     }
+
+    // start clocks if not already running
+    if (!this.clockSvc.clocks?.[exchange]?.[pair]) {
+      Object.values(ClockIntervalText).forEach(
+        (i: ClockIntervalText) => this.clockSvc.start(
+          'coinbase', i, pair, this._clockEventHandler.bind(this)
+        )
+      )
+    }
+
+    // save in memory
+    return this.subscriptions[exchange][pair]
   }
 
   /**
    * Unsubscribe from pairs
    * 
-   * @param subscriptions 
+   * @param pair 
    * @param exchange 
    */
-  async unsubscribe(subscriptions: string[], exchange = 'coinbase') {
-    // get coinbase subscriptions
-    if (!subscriptions.length) {
-      throw new Error('at least one pair is required to unsubscribe')
-    }
-
+  async unsubscribe(pair: string, exchange = 'coinbase') {
     switch (exchange) {
       case 'coinbase':
-        this._unsubscribeFromCoinbasePairs(subscriptions)
+        this.coinbaseSvc.unsubscribe(pair)
         break
       case 'alpaca':
-        // TODO
+        // this.alpacaSvc.unsubscribe(pair)
         break
       default:
         throw new Error('invalid exchange')
     }
+
+    if (!this.clockSvc.clocks?.[exchange]?.[pair]) {
+      Object.values(ClockIntervalText).forEach(
+        (i: ClockIntervalText) => this.clockSvc.stop(exchange, i, pair)
+      )
+    }
+
+    delete this.subscriptions[exchange][pair]
   }
 
   /**
@@ -102,34 +136,40 @@ export class ExchangeSubscriberService {
    * @param interval 
    * @param pair 
    */
-  private _clockEventHandler(interval: ClockIntervalText, exchange: string,  pair: string) {
-
+  private _clockEventHandler(interval: ClockIntervalText, exchange: string, pair: string) {
     const now = new Date().getTime()
     const intvlTime = ClockInterval[interval]
-    const lastIndex = this.tickerTimes?.[exchange]?.[pair]?.findIndex((t) => t < (now-intvlTime))
+    const lastIndex = this.updateTimes?.[exchange]?.[pair]?.findIndex((t) => t < (now - intvlTime))
+    const updates = this.updates?.[exchange]?.[pair]?.slice(0, lastIndex)
+    const totalTrades = updates?.reduce<number>((t, { lastTrade }) => lastTrade ? (t + 1) : t, 0)
+    const priceSum = updates?.reduce<bn>((t, { lastTrade }) => bn(t).plus(lastTrade?.price || '0'), bn('0'))
+    const sizeSum = updates?.reduce<bn>((t, { lastTrade }) => bn(t).plus(lastTrade?.size || '0'), bn('0'))
+    const avgTradePrice = priceSum?.gt(0) ? priceSum.div(totalTrades)?.toString() : null
+    const avgTradeSize = sizeSum?.gt(0) ? sizeSum.div(totalTrades)?.toString() : null
 
-    // TODO cb vs. alpaca tickers
-    const tickers = this.tickers?.[exchange]?.[pair]?.slice(0, lastIndex)
-    const priceSum = tickers?.reduce<bn>((t, {price}) => bn(t).plus(price), bn('0'))
+    // best bid/ask
+    const bestAsk = this.updates?.[exchange]?.[pair]?.[0]?.bestAsk
+    const bestBid = this.updates?.[exchange]?.[pair]?.[0]?.bestBid
 
-    const avgTradePrice = priceSum?.gt(0) ? priceSum.div(tickers.length)?.toString() : null
-
+    // send event
     const ev = new ClockEvent(
       interval,
       exchange,
       pair,
-      this.coinbaseSvc.getBestBid(pair),
-      this.coinbaseSvc.getBestAsk(pair),
-      avgTradePrice
+      bestBid,
+      bestAsk,
+      avgTradePrice,
+      avgTradeSize
+      // TODO liquidity calculations
     )
 
     // tell everyone what's up
-    this.momentum.emit(`clock:${interval}`, ev)
+    this.momentum.emit(`clock:${interval}:${exchange}`, ev)
 
     // clear data 
-    // TODO max inteerval
-    if (interval === '15m' && this.tickers?.[exchange]?.[pair].length) {
-      this.tickers[exchange][pair] = []
+    // TODO max interval > 15min?
+    if (interval === '15m' && this.updates?.[exchange]?.[pair].length) {
+      this.updates[exchange][pair] = []
     }
   }
 
@@ -139,89 +179,84 @@ export class ExchangeSubscriberService {
    * @param exchange 
    * @param m 
    */
-  private _recordTicker(exchange: string, m: WebSocketTickerMessage) {
-    const pair = m.product_id
+  private _recordUpdate(exchange: string, update: SubscriptionUpdate) {
+    const pair = update.pair
 
     // init
-    if (typeof this.tickers[exchange] === 'undefined') {
-        this.tickers[exchange] = {}
-        this.tickerTimes[exchange] = {}
-    }
-    if (typeof this.tickers[exchange][pair] === 'undefined') {
-        this.tickers[exchange][pair] = []
-        this.tickerTimes[exchange][pair] = []
+    if (typeof this.updates[exchange][pair] === 'undefined') {
+      this.updates[exchange][pair] = []
+      this.updateTimes[exchange][pair] = []
     }
 
-    // push
-    this.tickers[exchange][pair].unshift(m)
-    this.tickerTimes[exchange][pair].unshift(new Date(m.time).getTime())
+    // unshift updates
+    this.updates[exchange][pair].unshift(update)
+    this.updateTimes[exchange][pair].unshift(new Date(update.timestamp).getTime())
+
+    // emit update
+    this.momentum.emit(`update:${exchange}`, update)
   }
 
-   /**
+  /**
    * Subscribe to coinbase 
    * tickers and order books
    * 
-   * @param pairs 
+   * @param pair
    */
-  private _subscribeToCoinbasePairs(pairs: string[]) {
-
-    if (!this.cbSubscriptions) {
-
-    }
-    
-    // Subscribe to tickers
-    this.coinbaseSvc.subscribe({
-      [WebSocketChannelName.TICKER]: pairs.map(s => ({
-        productId: s,
-        handler: (m: WebSocketTickerMessage) => {
-          this._recordTicker('coinbase', m)
-          this.momentum.emit(`ticker:coinbase:${m.product_id}`, m)
+  private async _subscribeToCoinbasePair(pair: string): Promise<Observable<CoinbaseSubscription>> {
+    return new Promise(async (res, rej) => {
+      let resolved = false
+      try {
+        const subscription = await this.coinbaseSvc.subscribe(pair)
+        subscription
+          // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
+          .pipe(throttle(() => interval(500)))
+          .subscribe((sub) => {
+            // setup handler
+            this._handleCoinbaseSubscriptionUpdate(sub)
+            // return once connected
+            if (sub.connected && !resolved) {
+              resolved = true
+              res(subscription)
+            }
+          }, rej)
+        } catch(err) {
+          rej(err)
         }
-      }))
-    })
-    
-    
-    // Start syncing books
-    pairs.forEach((s: string) => {
-      this.coinbaseSvc.syncBook(s)
-    })
-
-    // Start clocks
-    pairs.forEach((p: string) => {
-      Object.values(ClockIntervalText).forEach(
-        (i: ClockIntervalText) => this.clockSvc.start(
-          'coinbase', i, p, this._clockEventHandler.bind(this)
-        )
-      )
     })
   }
 
   /**
-   * Unsubscribe from coinbase 
-   * tickers and order books
+   * Handle an update fired by a
+   * coinbase subscription observable
    * 
-   * @param pairs 
+   * @param update 
    */
-  private _unsubscribeFromCoinbasePairs(pairs: string[]) {
-    if (pairs.length) {
+  private _handleCoinbaseSubscriptionUpdate(update: CoinbaseSubscription) {
+    const bestBid = update.book.bids.max()
+    const bestAsk = update.book.asks.min()
+    // TODO calc liquidity within % of mid
 
-      // Stop clocks
-      pairs.forEach((p: string) => {
-        Object.values(ClockIntervalText).forEach(
-          (i: ClockIntervalText) => this.clockSvc.stop('coinbase', i, p)
-        )
-      })
-
-      // Unsubscribe
-      this.coinbaseSvc.unsubscribe({
-        [WebSocketChannelName.TICKER]: pairs.map(s => ({
-          productId: s
-        })),
-        [WebSocketChannelName.LEVEL2]: pairs.map(s => ({
-          productId: s
-        }))
-      })
-    }
+    // check ticker update is unique
+    const lastUpdate = this.updates['coinbase'][update.productId]?.[0]
+    const changed = lastUpdate ? (String(lastUpdate?.lastTrade?.id) !== String(update.ticker?.trade_id)) : false
+    const lastTrade = changed ? {
+      id: String(update.ticker?.trade_id),
+      price: update.ticker?.price,
+      size: update.ticker?.last_size,
+      timestamp: new Date(update.ticker?.time).getTime(), // unix
+      side: update.ticker?.side
+    } : null
+    
+    // record update
+    this._recordUpdate('coinbase', {
+      pair: update.productId,
+      lastTrade,
+      bestBid,
+      bestAsk,
+      // bidLiquidity: string
+      // askLiquidity: string
+      timestamp: update.lastUpdate
+    })
   }
 
   /**
@@ -230,18 +265,17 @@ export class ExchangeSubscriberService {
    * 
    * @param pairs 
    */
-  private _subscribeToAlpacaPairs(pairs: string[]) {
+  private _subscribeToAlpacaPair(pair: string) {
     // TODO
   }
 
   /**
-   * Unsubscribe from alpaca 
-   * tickers and quotes
+   * Handle an update fired by a
+   * alpaca subscription observable
    * 
-   * @param pairs 
+   * @param update 
    */
-  private _unsubscribeFromAlpacaPairs(pairs: string[]) {
-    // TODO
-  }
-
+  // private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
+  //  TODO
+  // }
 }

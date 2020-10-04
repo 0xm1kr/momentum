@@ -3,6 +3,7 @@ import { Transport, ClientsModule } from '@nestjs/microservices'
 import { RedisModule} from 'nestjs-redis'
 import { ConfigModule } from '@nestjs/config'
 import { AppController } from './app.controller'
+import { AppService } from './app.service'
 
 @Module({
   imports: [
@@ -26,9 +27,16 @@ import { AppController } from './app.controller'
       keyPrefix: 'mmtm'
     })
   ],
-  providers: [],
+  providers: [
+    AppService
+  ],
   controllers: [
     AppController
   ]
 })
-export class AppModule {}
+export class AppModule {
+  async beforeApplicationShutdown() {
+    console.log('GATEWAY: SHUTTING DOWN!')
+    // TODO emit shutdown event?
+  }
+}

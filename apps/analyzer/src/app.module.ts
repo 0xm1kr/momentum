@@ -6,4 +6,9 @@ import { AppController } from './app.controller'
   controllers: [AppController],
   providers: [],
 })
-export class AppModule {}
+export class AppModule {
+  async beforeApplicationShutdown() {
+    console.log('ANALYZER: SHUTTING DOWN!')
+    // TODO emit shutdown event?
+  }
+}

@@ -45,4 +45,9 @@ require('events').EventEmitter.prototype._maxListeners = 100;
     AppController
   ]
 })
-export class AppModule {}
+export class AppModule {
+  async beforeApplicationShutdown() {
+    console.log('SUBSCRIBER: SHUTTING DOWN!')
+    // TODO emit shutdown event?
+  }
+}

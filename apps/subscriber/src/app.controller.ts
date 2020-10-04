@@ -4,6 +4,7 @@ import { Redis } from 'ioredis'
 import { ClientProxy, EventPattern } from '@nestjs/microservices'
 import { ExchangeSubscriberService } from './provider/exchange-subscriber.service'
 
+
 @Controller('/subscriber')
 export class AppController {
   constructor(
@@ -22,20 +23,15 @@ export class AppController {
     const cbSubs = await this.redis.smembers('subscriptions:coinbase')
     if (cbSubs.length) {
       // subscribe
-      this.exSubSvc.subscribe(cbSubs, 'coinbase')
+      cbSubs.forEach(s => this.exSubSvc.subscribe(s, 'coinbase'))
     }
 
     // init alpaca subscriptions
     const alpSubs = await this.redis.smembers('subscriptions:alpaca')
     if (alpSubs.length) {
       // subscribe
-      this.exSubSvc.subscribe(alpSubs, 'alpaca')
+      cbSubs.forEach(s => this.exSubSvc.subscribe(s, 'alpaca'))
     }
-  }
-
-  async beforeApplicationShutdown() {
-    console.log('SHUTTING DOWN!')
-    // TODO emit shutdown event?
   }
 
   @Get('/ping')
@@ -52,9 +48,8 @@ export class AppController {
     pair: string
   }) {
     // add subscription
-    this.exSubSvc.subscribe([ createSub.pair ], createSub.exchange)
+    await this.exSubSvc.subscribe(createSub.pair, createSub.exchange)
     await this.redis.sadd(`subscriptions:${createSub.exchange}`, createSub.pair)
-
     // TODO emit event?
   }
 
@@ -64,9 +59,8 @@ export class AppController {
     pair: string
   }) {
     // remove subscription
+    await this.exSubSvc.unsubscribe(delSub.pair, delSub.exchange)
     await this.redis.srem(`subscriptions:${delSub.exchange}`, delSub.pair)
-    this.exSubSvc.unsubscribe([ delSub.pair ], delSub.exchange)
-
     // TODO emit event?
   }
 

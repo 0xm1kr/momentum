@@ -1,15 +1,17 @@
-import { Body, Controller, Delete, Get, Inject, Param, Post } from '@nestjs/common';
-import { RedisService } from 'nestjs-redis'
+import { Body, Controller, Delete, Get, Inject, Post, HttpException } from '@nestjs/common';
+import { RedisService } from 'nestjs-redis';
 import { Redis } from 'ioredis';
 import { ClientProxy } from '@nestjs/microservices';
-import { AlgorithmStartEvent } from '@momentum/events'
+import { AlgorithmEvent } from '@momentum/events'
+import { AppService } from './app.service';
 
 @Controller()
 export class AppController {
   constructor(
     @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
+    private readonly appSvc: AppService,
     private readonly redisSvc: RedisService
-  ) {}
+  ) { }
 
   private redis: Redis
 
@@ -18,22 +20,12 @@ export class AppController {
     this.redis = await this.redisSvc.getClient('momentum-state')
 
     // DEV ONLY
-    await this.redis.flushall()
+    // await this.redis.flushall()
   }
 
   @Get('/subscriptions')
   async getSubscriptions() {
-    const keys = await this.redis.keys('subscriptions:*')
-
-    return Promise.all(
-      keys.map(async (k: string) => {
-        const params = k.split(':')
-        return {
-          exchange: params[1],
-          pairs: await this.redis.smembers(k)
-        }
-      })
-    )
+    return this.appSvc.getSubscriptions()
   }
 
   @Post('/subscriptions')
@@ -63,60 +55,67 @@ export class AppController {
   @Get('/algorithms')
   async getAlgos() {
     const keys = await this.redis.keys('algorithms:*')
-
     return Promise.all(
-      keys.map(async (k: string) => {
-        const params = k.split(':')
-        return {
-          exchange: params[1],
-          algorithm: params[2],
-          pairs: await this.redis.smembers(k)
-        }
-      })
-    )
-  }
-
-  @Get('/algorithms/:algo')
-  async getAlgorithm(@Param() params) {
-    const keys = await this.redis.keys(`algorithms:${params.algo}:*`)
-    return await Promise.all(
-      keys.map(async (k) => {
-        const res = JSON.parse(await this.redis.get(k))
-        return {
-          [k]: res
-        }
-      })
+      keys.map(async (k: string) => (this.redis.hgetall(k)))
     )
   }
 
   @Post('/algorithms')
-  async createAlgo(@Param() params, @Body() createAlgorithm: AlgorithmStartEvent) {
+  async createAlgo(@Body() algorithm: AlgorithmEvent) {
 
-    await this.redis.sadd('algorithms:coinbase', params.algo)
+    // make sure we are subscribed
+    let found = false
+    const subs = await this.appSvc.getSubscriptions()
+    subs.forEach(s => {
+      if (s.exchange === algorithm.exchange) {
+        found = s.pairs.includes(algorithm.pair)
+      }
+    })
+
+    if (!found) {
+      throw new HttpException(
+        `${algorithm.exchange}:${algorithm.pair} does not have a running subscription`, 400
+      )
+    }
 
     await this.momentum.emit(
-      `start:${params.algo}`,
-      new AlgorithmStartEvent(
-        createAlgorithm.pair, 
-        createAlgorithm.size, 
-        createAlgorithm.lastTrade
+      `start:${algorithm.algorithm}:${algorithm.exchange}`,
+      new AlgorithmEvent(
+        algorithm.algorithm,
+        algorithm.exchange,
+        algorithm.pair,
+        algorithm.size,
+        algorithm.period,
+        algorithm.lastTrade
       )
     )
 
     return {
-      message: `Algorithm starting: ${JSON.stringify(createAlgorithm)}`
+      message: `Algorithm starting: ${JSON.stringify(algorithm)}`
     }
   }
 
-  @Delete('/algorithms/:algo')
-  async stopAlgo(@Param() params) {
-
-    await this.redis.srem('algorithms:coinbase', params.algo)
-    await this.momentum.emit(`stop:${params.algo}`, {})
+  @Delete('/algorithms')
+  async stopAlgo(@Body() algorithm: AlgorithmEvent) {
+    await this.momentum.emit(`stop:${algorithm.algorithm}:${algorithm.exchange}`, algorithm)
 
     return {
-      message: `Algorithm stopping: ${params.algo}`
+      message: `Algorithm stopping: ${algorithm.algorithm}:${algorithm.exchange}:${algorithm.pair}`
     }
+  }
+
+  @Get('/trades')
+  async getTrades() {
+    const keys = await this.redis.keys('trades:*')
+    return Promise.all(
+      keys.map(async (k: string) => {
+        const keys = k.split(':')
+        const pair = keys[keys.length - 1]
+        return {
+          [pair]: await this.redis.lrange(k, 0, 100)
+        }
+      })
+    )
   }
 
 }

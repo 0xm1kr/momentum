@@ -1,18 +1,23 @@
 
-enum ClockIntervalText {
-    OneSecond = '1s',
+export enum ClockIntervalText {
     OneMinute = '1m',
     FiveMinute = '5m',
     FifteenMinute = '15m',
     OneHour = '1h'
 }
 
+export enum ClockInterval {
+    '1m' = 60000,
+    '5m' = 300000,
+    '15m' = 900000
+}
+
 export class ClockEvent {
     exchange: string
     pair: string
     interval: ClockIntervalText
-    bestBid: string
-    bestAsk: string
+    bestBid: string[]
+    bestAsk: string[]
     avgTradePrice: string
     avgTradeSize?: string
     avgBidDepth?: string
@@ -33,8 +38,8 @@ export class ClockEvent {
         interval: ClockIntervalText,
         exchange: string,
         pair: string,
-        bestBid: string,
-        bestAsk: string,
+        bestBid: string[],
+        bestAsk: string[],
         avgTradePrice: string,
         avgTradeSize?: string,
         avgBidDepth?: string,

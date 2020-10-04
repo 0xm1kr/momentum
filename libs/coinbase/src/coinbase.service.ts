@@ -19,7 +19,7 @@ import {
   FeeUtil,
   FeeEstimate,
   CandleGranularity,
-  Candle
+  Candle, WebSocketSubscription, WebSocketErrorMessage
 } from 'coinbase-pro-node'
 import { RBTree } from 'bintrees'
 import { Observable, Observer } from 'rxjs'
@@ -49,30 +49,22 @@ export {
   WebSocketResponseType
 }
 
-export type Subscription = {
-  productId: string,
-  handler?: (message: WebSocketResponse | WebSocketTickerMessage) => void
+export type Book = {
+  bids: Record<string, RBTree<string[]>>
+  asks: Record<string, RBTree<string[]>>
 }
 
-export type CoinbaseSubscriptions = {
-  [key in WebSocketChannelName]?: Subscription[]
+export type CoinbaseSubscription = {
+  productId: string
+  connected: string[]
+  unsubscribe?: () => void
+  book: Book
+  ticker?: WebSocketTickerMessage
+  lastUpdate?: number // unix time
+  lastUpdateProperty?: string // which property was updated
 }
 
-export type BookSnapshot = {
-  type: WebSocketResponseType
-  product_id: string
-} & OrderBookLevel2
-
-export type BookUpdate = {
-  type: WebSocketResponseType
-  product_id: string
-  // [
-  //     "buy|sell",  // buy/sell
-  //     "11602.18",  // price level
-  //     "0.00000000" // size: size of zero means this price level can be removed
-  // ]
-  changes: string[][]
-}
+export type CoinbaseSubscriptions = Record<string, Observable<CoinbaseSubscription>>
 
 @Injectable()
 export class CoinbaseService {
@@ -80,10 +72,9 @@ export class CoinbaseService {
   protected _client!: CoinbasePro
   protected _wsClient!: ReconnectingWebSocket
   protected _channels: WebSocketChannel[] = []
-  protected _subscriptionMap: Observable<CoinbaseSubscriptions>
-  protected _subscriptionMapObserver: Observer<CoinbaseSubscriptions>
-  protected _bids: Record<string, RBTree<string[]>> = {}
-  protected _asks: Record<string, RBTree<string[]>> = {}
+  protected _observableSubscriptions: CoinbaseSubscriptions = {}
+  protected _subscriptionMap: Record<string, CoinbaseSubscription> = {}
+  protected _observers: Record<string, Observer<CoinbaseSubscription>> = {}
 
   constructor() {
     this._client = new CoinbasePro({
@@ -94,13 +85,6 @@ export class CoinbaseService {
     })
   }
 
-  public get subscriptions(): Promise<Observable<CoinbaseSubscriptions>> {
-    if (this._subscriptionMap) {
-      return Promise.resolve(this._subscriptionMap)
-    }
-    return this._createSubscriptionObserver()
-  }
-
   public get connection(): Promise<WebSocketClient> {
     if (this._wsClient?.OPEN) {
       return Promise.resolve(this._client.ws)
@@ -108,8 +92,13 @@ export class CoinbaseService {
     return this._connect()
   }
 
+  public get subscriptions() {
+    return this._observableSubscriptions
+  }
+
   /**
    * place a limit order
+   * TODO make observable via socket
    * 
    * @param productId 
    * @param params {
@@ -212,148 +201,44 @@ export class CoinbaseService {
   }
 
   /**
-   * subscribe to websocket channels
+   * Subscribe to a product
    * 
-   * @param subscriptions 
+   * @param subscription 
    */
-  public async subscribe(subscriptions: CoinbaseSubscriptions): Promise<Observable<CoinbaseSubscriptions>> {
+  public async subscribe(productId: string): Promise<Observable<CoinbaseSubscription>> {
 
-    // connect
-    const conn = await this.connection
-
-    // TODO prevent duplicate subscriptions?
-
-    // setup l2 message handlers
-    if (subscriptions[WebSocketChannelName.LEVEL2]) {
-      conn.on(WebSocketEvent.ON_MESSAGE, (m: WebSocketResponse) => {
-        const subs = subscriptions[WebSocketChannelName.LEVEL2].filter((val => val.productId === (m as any).product_id))
-        if (subs.length) {
-          subs.forEach((s) => s.handler(m))
-        }
-      })
+    // resubscribe or refresh?
+    if (this.subscriptions[productId]) {
+      return Promise.resolve(this.subscriptions[productId])
     }
 
-    // ticker handlers
-    if (subscriptions[WebSocketChannelName.TICKER]) {
-      conn.on(WebSocketEvent.ON_MESSAGE_TICKER, (m: WebSocketTickerMessage) => {
-        const subs = subscriptions[WebSocketChannelName.TICKER].filter((val => val.productId === (m as any).product_id))
-        if (subs.length) {
-          subs.forEach((s) => s.handler(m))
-        }
-      })
-    }
-
-    // setup channels
-    const channels = Object.keys(subscriptions).map(s => ({
-      name: s,
-      product_ids: subscriptions[s].map(sId => (sId.productId))
-    })) as WebSocketChannel[]
-
-    // subscribe
-    conn.subscribe(channels)
-
-    return this._subscriptionMap
+    this._observableSubscriptions[productId] = await this._createSubscriptionObserver(productId)
+    
+    return this._observableSubscriptions[productId]
   }
 
   /**
-   * Unsubscribe from channels
+   * Unsubscribe from a product
    * 
-   * @param subscriptions 
-   */
-  public unsubscribe(subscriptions: CoinbaseSubscriptions) {
-    const channels = Object.keys(subscriptions).map(s => ({
-      name: s,
-      product_ids: subscriptions[s].map(sId => (sId.productId))
-    })) as WebSocketChannel[]
-    this._client.ws.unsubscribe(channels)
-  }
-
-  /**
-   * Synchronize a product 
-   * orderbook in memory
-   * 
-   * @param productId
-   */
-  public syncBook(productId: string): void {
-    if (!this._bids[productId]) {
-      this._bids[productId] = new RBTree(
-        (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
-      )
-    }
-
-    if (!this._asks[productId]) {
-      this._asks[productId] = new RBTree(
-        (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
-      )
-    }
-
-    // watch the book
-    this.subscribe({
-      [WebSocketChannelName.LEVEL2]: [{
-        productId,
-        handler: (message: WebSocketResponse) => {
-          const productId = (message as any).product_id
-
-          // handle snapshot
-          if (message.type === WebSocketResponseType.LEVEL2_SNAPSHOT) {
-            for (let b = 0; b < (message as any).bids.length; b++) {
-              this._bids[productId].insert((message as any).bids[b])
-            }
-            for (let a = 0; a < (message as any).asks.length; a++) {
-              this._asks[productId].insert((message as any).asks[a])
-            }
-          }
-
-          // handle update
-          if (message.type === WebSocketResponseType.LEVEL2_UPDATE) {
-            for (let c = 0; c < (message as any).changes.length; c++) {
-              const change = (message as any).changes[c]
-              if (change[0] === 'buy') {
-                const bid = this._bids[productId].find([change[1], change[2]])
-                if (bid) {
-                  if (bn(change[2]).eq(0)) {
-                    this._bids[productId].remove([change[1], change[2]])
-                  } else {
-                    this._bids[productId].insert([change[1], change[2]])
-                  }
-                } else {
-                  this._bids[productId].insert([change[1], change[2]])
-                }
-              }
-              if (change[0] === 'sell') {
-                const ask = this._asks[productId].find([change[1], change[2]])
-                if (ask) {
-                  if (bn(change[2]).eq(0)) {
-                    this._asks[productId].remove([change[1], change[2]])
-                  } else {
-                    this._asks[productId].insert([change[1], change[2]])
-                  }
-                } else {
-                  this._asks[productId].insert([change[1], change[2]])
-                }
-              }
-            }
-          }
-        }
-      }]
-    })
-  }
-
-  /**
-   * Get the best bid for a book
    * @param productId 
    */
-  public getBestBid(productId: string) {
-    return this._bids[productId] ? this._bids[productId].max() : []
+  public async unsubscribe(productId: string) {
+    if (!this._subscriptionMap?.[productId]) return
+
+    try {
+      // unsubscribe
+      this._subscriptionMap[productId]?.unsubscribe()
+      // remove data
+      delete this._subscriptionMap[productId]
+      delete this._observableSubscriptions[productId]
+      delete this._observers[productId]
+    } catch(err) {
+      console.warn(err)
+    }
+
+    return true
   }
 
-  /**
-   * Get the best ask for a book
-   * @param productId 
-   */
-  public getBestAsk(productId: string) {
-    return this._asks[productId] ? this._asks[productId].min() : []
-  }
 
   // ----- internal methods --------
 
@@ -369,8 +254,33 @@ export class CoinbaseService {
 
       // on error
       this._client.ws.on(WebSocketEvent.ON_ERROR, (e) => {
+        this._wsClient = null
         rej(e)
       })
+
+      // watch changes to subscriptions
+      this._client.ws.on(
+        WebSocketEvent.ON_SUBSCRIPTION_UPDATE, 
+        this._handleSubscriptionUpdate.bind(this)
+      )
+
+      // on message error
+      this._client.ws.on(
+        WebSocketEvent.ON_MESSAGE_ERROR,
+        this._handleSubscriptionError.bind(this)
+      )
+
+      // ticker message
+      this._client.ws.on(
+        WebSocketEvent.ON_MESSAGE_TICKER, 
+        this._handleSubscriptionTickerMessage.bind(this)
+      )
+
+      // book update
+      this._client.ws.on(
+        WebSocketEvent.ON_MESSAGE, 
+        this._handleSubscriptionBookMessage.bind(this)
+      )
 
       // connect
       this._wsClient = this._client.ws.connect()
@@ -378,47 +288,187 @@ export class CoinbaseService {
   }
 
   /**
-   * Create a subscription observable
+   * Create a subscription observer
+   * 
+   * @param productId 
    */
-  protected async _createSubscriptionObserver(): Promise<Observable<CoinbaseSubscriptions>> {
-
-    // get coinbase socket connection
+  protected async _createSubscriptionObserver(productId: string): Promise<Observable<CoinbaseSubscription>> {
+    // connect
     const conn = await this.connection
 
+    // init subscription
+    this._subscriptionMap[productId] = {
+      productId,
+      connected: [],
+      ticker: null,
+      book: {
+        bids: new RBTree(
+          (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
+        ),
+        asks: new RBTree(
+          (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
+        )
+      }
+    }
+       
     // setup observable
-    this._subscriptionMap = new Observable<CoinbaseSubscriptions>(subject => {
-      this._subscriptionMapObserver = subject 
+    const subscription = new Observable<CoinbaseSubscription>(subject => {
+      this._observers[productId] = subject
 
-      // watch changes to subscriptions
-      conn.on(WebSocketEvent.ON_SUBSCRIPTION_UPDATE, subscriptions => {
-
-        // disconnect if no more subscriptions
-        if (subscriptions.channels.length === 0) {
-          subject.complete()
-          conn.disconnect()
-        }
-        // set active channels
-        this._channels = subscriptions.channels
-
-        // map back to CoinbaseSubscriptions
-        const sMap = {}
-        for (const c of subscriptions.channels) {
-          if (typeof sMap[c.name] === 'undefined') {
-            sMap[c.name] = []
-          }
-          sMap[c.name] = c.product_ids.map((p: string) => ({ productId: p }))
-        }
-        subject.next(sMap)
-      })
-
-      // on message error
-      conn.on(WebSocketEvent.ON_MESSAGE_ERROR, (e) => {
-        console.log('ON_MESSAGE_ERROR', e)
-        // TODO 
-        subject.error(e)
-      })
+      // setup unsubscribe function
+      this._subscriptionMap[productId].unsubscribe = function unsubscribe() {
+        conn.unsubscribe({ 
+          name: WebSocketChannelName.TICKER,
+          product_ids: [productId]
+        })
+        conn.unsubscribe({ 
+          name: WebSocketChannelName.LEVEL2,
+          product_ids: [productId]
+        })
+        subject.complete()
+      }
     })
+    
+    // subscribe
+    conn.subscribe({ 
+      name: WebSocketChannelName.TICKER,
+      product_ids: [productId]
+    })
+    conn.subscribe({ 
+      name: WebSocketChannelName.LEVEL2,
+      product_ids: [productId]
+    })
+    
+    return subscription
+  }
 
-    return this._subscriptionMap
+  /**
+   * Handle a subscription update event
+   * 
+   * @param productId 
+   * @param subject 
+   * @param subscriptions 
+   */
+  protected _handleSubscriptionUpdate(
+    subscriptions: WebSocketSubscription
+  ) {
+    // disconnect if no more subscriptions
+    if (subscriptions.channels.length === 0) {
+      this._client.ws.disconnect()
+      this._wsClient = null
+    }
+
+    if (this._subscriptionMap) {
+      // set subscription connected flag
+      subscriptions.channels.forEach((c: WebSocketChannel) => {
+        c.product_ids.forEach((p: string) => {
+          this._subscriptionMap[p].connected.push(c.name)
+          this._observers[p].next(this._subscriptionMap[p])
+        })
+      })
+    }
+    
+  }
+
+  /**
+   * Handle a subscription error message
+   * 
+   * @param productId 
+   * @param subject 
+   * @param error 
+   */
+  protected _handleSubscriptionError(
+    error: WebSocketErrorMessage
+  ) {
+    // TODO
+    // this._observers[].error(error)
+    // delete this._subscriptionMap[productId]
+    console.log(error)
+  }
+
+  /**
+   * Handle a subscription ticker message
+   * 
+   * @param subject 
+   * @param message 
+   */
+  protected _handleSubscriptionTickerMessage(
+    message: WebSocketTickerMessage
+  ) {
+    const productId = message.product_id
+    
+    // event fired without initialized subscription?
+    if (!this._subscriptionMap?.[productId]) return
+
+    this._subscriptionMap[productId].ticker = message
+    this._subscriptionMap[productId].lastUpdateProperty = 'ticker'
+    this._subscriptionMap[productId].lastUpdate = new Date().getTime()
+    this._observers[productId].next(this._subscriptionMap[productId])
+  }
+
+  /**
+   * Handle a subscription book 
+   * update (l2, l2snapshot)
+   * 
+   * @param subject 
+   * @param message 
+   */
+  protected _handleSubscriptionBookMessage(
+    message: WebSocketResponse
+  ) {
+    const productId = (message as any).product_id
+
+    // event fired after unsubscribe
+    if (!this._subscriptionMap?.[productId]) return
+
+    // handle snapshot
+    if (message.type === WebSocketResponseType.LEVEL2_SNAPSHOT) {
+      for (let b = 0; b < (message as any).bids.length; b++) {
+        this._subscriptionMap[productId].book.bids.insert((message as any).bids[b])
+      }
+      for (let a = 0; a < (message as any).asks.length; a++) {
+        this._subscriptionMap[productId].book.asks.insert((message as any).asks[a])
+      }
+      this._subscriptionMap[productId].lastUpdateProperty = 'book'
+      this._subscriptionMap[productId].lastUpdate = new Date().getTime()
+      this._observers[productId].next(this._subscriptionMap[productId])
+    }
+
+    // handle update
+    if (message.type === WebSocketResponseType.LEVEL2_UPDATE) {
+
+      for (let c = 0; c < (message as any).changes.length; c++) {
+        const change = (message as any).changes[c]
+        if (change[0] === 'buy') {
+          const bid = this._subscriptionMap[productId].book.bids.find([change[1], change[2]])
+          if (bid) {
+            if (bn(change[2]).eq(0)) {
+              this._subscriptionMap[productId].book.bids.remove([change[1], change[2]])
+            } else {
+              this._subscriptionMap[productId].book.bids.insert([change[1], change[2]])
+            }
+          } else {
+            this._subscriptionMap[productId].book.bids.insert([change[1], change[2]])
+          }
+        }
+
+        if (change[0] === 'sell') {
+          const ask = this._subscriptionMap[productId].book.asks.find([change[1], change[2]])
+          if (ask) {
+            if (bn(change[2]).eq(0)) {
+              this._subscriptionMap[productId].book.asks.remove([change[1], change[2]])
+            } else {
+              this._subscriptionMap[productId].book.asks.insert([change[1], change[2]])
+            }
+          } else {
+            this._subscriptionMap[productId].book.asks.insert([change[1], change[2]])
+          }
+        }
+      }
+      
+      this._subscriptionMap[productId].lastUpdateProperty = 'book'
+      this._subscriptionMap[productId].lastUpdate = new Date().getTime()
+      this._observers[productId].next(this._subscriptionMap[productId])
+    }
   }
 }

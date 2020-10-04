@@ -1,14 +1,12 @@
 import { Injectable } from '@nestjs/common'
 
 export enum ClockIntervalText {
-    OneSecond = '1s',
     OneMinute = '1m',
     FiveMinute = '5m',
     FifteenMinute = '15m'
 }
 
 export enum ClockInterval {
-    '1s' = 1000,
     '1m' = 60000,
     '5m' = 300000,
     '15m' = 900000
@@ -23,6 +21,10 @@ export type ExchangeClocks = Record<string, Clocks>
 @Injectable()
 export class ClockService {
     protected _clocks: ExchangeClocks = {}
+
+    public get clocks() {
+        return this._clocks
+    }
 
     /**
      * Start a clock
