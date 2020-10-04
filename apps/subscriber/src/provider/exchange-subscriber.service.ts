@@ -2,9 +2,11 @@ import { Inject, Injectable } from '@nestjs/common'
 import { ClientProxy } from '@nestjs/microservices'
 import bn from 'big.js'
 import {
+  Observable,
   CoinbaseService,
+  CoinbaseSubscriptions,
   WebSocketChannelName,
-  WebSocketTickerMessage,
+  WebSocketTickerMessage
 } from '@momentum/coinbase'
 import { ClockEvent } from '@momentum/events/clock.event'
 import { 
@@ -28,17 +30,28 @@ export class ExchangeSubscriberService {
     private readonly coinbaseSvc: CoinbaseService,
     private readonly clockSvc: ClockService
   ) { }
-
+  
+  private cbSubscriptions: Observable<CoinbaseSubscriptions>
   private tickers: ExchangeTickers = {}
   private tickerTimes: ExchangeTickerTimes = {}
 
   async onApplicationBootstrap() {
     // connect to momentum pubsub
-    await this.momentum.connect()
+    await this.momentum.connect();
+
+    // listen to coinbase subscriptions
+    this.cbSubscriptions = await this.coinbaseSvc.subscriptions
+    this.cbSubscriptions.subscribe(console.log, console.error)
+
+    // listen to alpaca subscriptions
+    // TODO
   }
 
   /**
-   * subscribe to pairs
+   * Subscribe to pairs
+   * 
+   * @param subscriptions 
+   * @param exchange 
    */
   async subscribe(subscriptions: string[], exchange = 'coinbase') {
     // get subscriptions
@@ -59,7 +72,10 @@ export class ExchangeSubscriberService {
   }
 
   /**
-   * unsubscribe from pairs
+   * Unsubscribe from pairs
+   * 
+   * @param subscriptions 
+   * @param exchange 
    */
   async unsubscribe(subscriptions: string[], exchange = 'coinbase') {
     // get coinbase subscriptions
@@ -91,9 +107,12 @@ export class ExchangeSubscriberService {
     const now = new Date().getTime()
     const intvlTime = ClockInterval[interval]
     const lastIndex = this.tickerTimes?.[exchange]?.[pair]?.findIndex((t) => t < (now-intvlTime))
+
+    // TODO cb vs. alpaca tickers
     const tickers = this.tickers?.[exchange]?.[pair]?.slice(0, lastIndex)
     const priceSum = tickers?.reduce<bn>((t, {price}) => bn(t).plus(price), bn('0'))
-    const avgTradePrice = priceSum.gt(0) ? priceSum.div(tickers.length)?.toString() : null
+
+    const avgTradePrice = priceSum?.gt(0) ? priceSum.div(tickers.length)?.toString() : null
 
     const ev = new ClockEvent(
       interval,
@@ -104,8 +123,14 @@ export class ExchangeSubscriberService {
       avgTradePrice
     )
 
-    // tell our app what's up
+    // tell everyone what's up
     this.momentum.emit(`clock:${interval}`, ev)
+
+    // clear data 
+    // TODO max inteerval
+    if (interval === '15m' && this.tickers?.[exchange]?.[pair].length) {
+      this.tickers[exchange][pair] = []
+    }
   }
 
   /**
@@ -139,6 +164,11 @@ export class ExchangeSubscriberService {
    * @param pairs 
    */
   private _subscribeToCoinbasePairs(pairs: string[]) {
+
+    if (!this.cbSubscriptions) {
+
+    }
+    
     // Subscribe to tickers
     this.coinbaseSvc.subscribe({
       [WebSocketChannelName.TICKER]: pairs.map(s => ({
@@ -149,7 +179,8 @@ export class ExchangeSubscriberService {
         }
       }))
     })
-
+    
+    
     // Start syncing books
     pairs.forEach((s: string) => {
       this.coinbaseSvc.syncBook(s)

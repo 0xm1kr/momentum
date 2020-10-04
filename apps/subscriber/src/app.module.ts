@@ -8,6 +8,9 @@ import { ExchangeSubscriberService } from './provider/exchange-subscriber.servic
 import { ClockService } from './provider/clock.service'
 import { AppController } from './app.controller'
 
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+require('events').EventEmitter.prototype._maxListeners = 100;
+
 @Module({
   imports: [
     // Config

@@ -1,10 +1,10 @@
-import { Controller, Inject } from '@nestjs/common'
+import { Controller, Get, Inject } from '@nestjs/common'
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
 import { ClientProxy, EventPattern } from '@nestjs/microservices'
 import { ExchangeSubscriberService } from './provider/exchange-subscriber.service'
 
-@Controller()
+@Controller('/subscriber')
 export class AppController {
   constructor(
     @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
@@ -31,6 +31,19 @@ export class AppController {
       // subscribe
       this.exSubSvc.subscribe(alpSubs, 'alpaca')
     }
+  }
+
+  async beforeApplicationShutdown() {
+    console.log('SHUTTING DOWN!')
+    // TODO emit shutdown event?
+  }
+
+  @Get('/ping')
+  async handlePing() {
+      return {
+          pong: new Date().getTime(),
+          running: []
+      }
   }
 
   @EventPattern('subscribe')

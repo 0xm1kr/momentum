@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common'
 import {
   CoinbasePro,
   Account,
+  WebSocketClient,
   WebSocketEvent,
   WebSocketChannelName,
   OrderSide,
@@ -21,6 +22,7 @@ import {
   Candle
 } from 'coinbase-pro-node'
 import { RBTree } from 'bintrees'
+import { Observable, Observer } from 'rxjs'
 import ReconnectingWebSocket from 'reconnecting-websocket'
 import bn from 'big.js'
 
@@ -38,19 +40,22 @@ import bn from 'big.js'
 // https://public.sandbox.pro.coinbase.com/profile/api
 //
 
-export type CBPParams = {
-  action: string
-  product?: string
-  param?: string
+export {
+  Observable,
+  WebSocketEvent,
+  WebSocketChannelName,
+  WebSocketResponse,
+  WebSocketTickerMessage,
+  WebSocketResponseType
 }
 
-export type BookSubscription = {
+export type Subscription = {
   productId: string,
-  handler?: (message: WebSocketResponse|WebSocketTickerMessage) => void
+  handler?: (message: WebSocketResponse | WebSocketTickerMessage) => void
 }
 
-export type BookSubscriptionMap = {
-  [key in WebSocketChannelName]?: BookSubscription[]
+export type CoinbaseSubscriptions = {
+  [key in WebSocketChannelName]?: Subscription[]
 }
 
 export type BookSnapshot = {
@@ -72,20 +77,35 @@ export type BookUpdate = {
 @Injectable()
 export class CoinbaseService {
 
-  protected client!: CoinbasePro
-  protected connection: ReconnectingWebSocket
-
-  public channels: WebSocketChannel[] = []
-  public bids: Record<string, RBTree<string[]>> = {}
-  public asks: Record<string, RBTree<string[]>> = {}
+  protected _client!: CoinbasePro
+  protected _wsClient!: ReconnectingWebSocket
+  protected _channels: WebSocketChannel[] = []
+  protected _subscriptionMap: Observable<CoinbaseSubscriptions>
+  protected _subscriptionMapObserver: Observer<CoinbaseSubscriptions>
+  protected _bids: Record<string, RBTree<string[]>> = {}
+  protected _asks: Record<string, RBTree<string[]>> = {}
 
   constructor() {
-    this.client = new CoinbasePro({
+    this._client = new CoinbasePro({
       apiKey: process.env.CBP_KEY,
       apiSecret: process.env.CBP_SECRET,
       passphrase: process.env.CBP_PASSPHRASE,
       useSandbox: (process.env.ENVIRONMENT !== 'LIVE')
     })
+  }
+
+  public get subscriptions(): Promise<Observable<CoinbaseSubscriptions>> {
+    if (this._subscriptionMap) {
+      return Promise.resolve(this._subscriptionMap)
+    }
+    return this._createSubscriptionObserver()
+  }
+
+  public get connection(): Promise<WebSocketClient> {
+    if (this._wsClient?.OPEN) {
+      return Promise.resolve(this._client.ws)
+    }
+    return this._connect()
   }
 
   /**
@@ -119,7 +139,7 @@ export class CoinbaseService {
       o.stop_price = params.stopPrice
     }
 
-    return this.client.rest.order.placeOrder(o)
+    return this._client.rest.order.placeOrder(o)
   }
 
   /**
@@ -141,7 +161,7 @@ export class CoinbaseService {
       side: params.side,
       funds: params.amount
     }
-    return this.client.rest.order.placeOrder(o)
+    return this._client.rest.order.placeOrder(o)
   }
 
   /**
@@ -158,7 +178,7 @@ export class CoinbaseService {
   }): Promise<FeeEstimate> {
     const pair = product.split('-')
     const quote = pair[1]
-    const feeTier = await this.client.rest.fee.getCurrentFees()
+    const feeTier = await this._client.rest.fee.getCurrentFees()
     return FeeUtil.estimateFee(params.size, params.price, params.side, params.type, feeTier, quote)
   }
 
@@ -166,7 +186,7 @@ export class CoinbaseService {
    * get accounts
    */
   public async getAccounts(): Promise<Account[]> {
-    return this.client.rest.account.listAccounts()
+    return this._client.rest.account.listAccounts()
   }
 
   /**
@@ -175,7 +195,7 @@ export class CoinbaseService {
    * @param productId 
    */
   public async getBook(productId = 'BTC-USD'): Promise<OrderBookLevel2> {
-    return this.client.rest.product.getProductOrderBook(productId, {
+    return this._client.rest.product.getProductOrderBook(productId, {
       level: OrderBookLevel.TOP_50_BIDS_AND_ASKS
     })
   }
@@ -186,7 +206,7 @@ export class CoinbaseService {
    * @param productId 
    */
   public async getCandles(productId = 'BTC-USD', granularity: CandleGranularity): Promise<Candle[]> {
-    return this.client.rest.product.getCandles(productId, {
+    return this._client.rest.product.getCandles(productId, {
       granularity
     })
   }
@@ -196,11 +216,16 @@ export class CoinbaseService {
    * 
    * @param subscriptions 
    */
-  public subscribe(subscriptions: BookSubscriptionMap): void {
+  public async subscribe(subscriptions: CoinbaseSubscriptions): Promise<Observable<CoinbaseSubscriptions>> {
 
-    // l2 message handler
+    // connect
+    const conn = await this.connection
+
+    // TODO prevent duplicate subscriptions?
+
+    // setup l2 message handlers
     if (subscriptions[WebSocketChannelName.LEVEL2]) {
-      this.client.ws.on(WebSocketEvent.ON_MESSAGE, (m: WebSocketResponse) => {
+      conn.on(WebSocketEvent.ON_MESSAGE, (m: WebSocketResponse) => {
         const subs = subscriptions[WebSocketChannelName.LEVEL2].filter((val => val.productId === (m as any).product_id))
         if (subs.length) {
           subs.forEach((s) => s.handler(m))
@@ -208,9 +233,9 @@ export class CoinbaseService {
       })
     }
 
-    // ticker handler
+    // ticker handlers
     if (subscriptions[WebSocketChannelName.TICKER]) {
-      this.client.ws.on(WebSocketEvent.ON_MESSAGE_TICKER, (m: WebSocketTickerMessage) => {
+      conn.on(WebSocketEvent.ON_MESSAGE_TICKER, (m: WebSocketTickerMessage) => {
         const subs = subscriptions[WebSocketChannelName.TICKER].filter((val => val.productId === (m as any).product_id))
         if (subs.length) {
           subs.forEach((s) => s.handler(m))
@@ -224,46 +249,10 @@ export class CoinbaseService {
       product_ids: subscriptions[s].map(sId => (sId.productId))
     })) as WebSocketChannel[]
 
-    // connection already open
-    if (this.connection?.OPEN) {
+    // subscribe
+    conn.subscribe(channels)
 
-      // subscribe
-      this.client.ws.subscribe(channels)
-
-    } else {
-      // on open, subscribe
-      this.client.ws.on(WebSocketEvent.ON_OPEN, () => {
-        console.log('ON_OPEN')
-        this.client.ws.subscribe(channels)
-      })
-
-      // on error
-      this.client.ws.on(WebSocketEvent.ON_ERROR, (e) => {
-        console.log('ON_ERROR', e)
-        throw new Error(e.message)
-      })
-      this.client.ws.on(WebSocketEvent.ON_MESSAGE_ERROR, (e) => {
-        console.log('ON_MESSAGE_ERROR', e)
-        throw new Error(e.message)
-      })
-
-      // changes to subscriptions
-      this.client.ws.on(WebSocketEvent.ON_SUBSCRIPTION_UPDATE, subscriptions => {
-        console.log('ON_SUBSCRIPTION_UPDATE', JSON.stringify(subscriptions))
-        // disconnect if no more subscriptions?
-        if (subscriptions.channels.length === 0) {
-          this.client.ws.disconnect()
-        }
-        this.channels = subscriptions.channels
-
-        // TODO callback?
-      })
-
-      // open connection
-      this.connection = this.client.ws.connect({
-        // debug: true
-      })
-    }
+    return this._subscriptionMap
   }
 
   /**
@@ -271,12 +260,12 @@ export class CoinbaseService {
    * 
    * @param subscriptions 
    */
-  public unsubscribe(subscriptions: BookSubscriptionMap) {
+  public unsubscribe(subscriptions: CoinbaseSubscriptions) {
     const channels = Object.keys(subscriptions).map(s => ({
       name: s,
       product_ids: subscriptions[s].map(sId => (sId.productId))
     })) as WebSocketChannel[]
-    this.client.ws.unsubscribe(channels)
+    this._client.ws.unsubscribe(channels)
   }
 
   /**
@@ -286,14 +275,14 @@ export class CoinbaseService {
    * @param productId
    */
   public syncBook(productId: string): void {
-    if (!this.bids[productId]) {
-      this.bids[productId] = new RBTree(
+    if (!this._bids[productId]) {
+      this._bids[productId] = new RBTree(
         (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
       )
     }
 
-    if (!this.asks[productId]) {
-      this.asks[productId] = new RBTree(
+    if (!this._asks[productId]) {
+      this._asks[productId] = new RBTree(
         (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
       )
     }
@@ -308,10 +297,10 @@ export class CoinbaseService {
           // handle snapshot
           if (message.type === WebSocketResponseType.LEVEL2_SNAPSHOT) {
             for (let b = 0; b < (message as any).bids.length; b++) {
-              this.bids[productId].insert((message as any).bids[b])
+              this._bids[productId].insert((message as any).bids[b])
             }
             for (let a = 0; a < (message as any).asks.length; a++) {
-              this.asks[productId].insert((message as any).asks[a])
+              this._asks[productId].insert((message as any).asks[a])
             }
           }
 
@@ -320,27 +309,27 @@ export class CoinbaseService {
             for (let c = 0; c < (message as any).changes.length; c++) {
               const change = (message as any).changes[c]
               if (change[0] === 'buy') {
-                const bid = this.bids[productId].find([change[1], change[2]])
+                const bid = this._bids[productId].find([change[1], change[2]])
                 if (bid) {
                   if (bn(change[2]).eq(0)) {
-                    this.bids[productId].remove([change[1], change[2]])
+                    this._bids[productId].remove([change[1], change[2]])
                   } else {
-                    this.bids[productId].insert([change[1], change[2]])
+                    this._bids[productId].insert([change[1], change[2]])
                   }
                 } else {
-                  this.bids[productId].insert([change[1], change[2]])
+                  this._bids[productId].insert([change[1], change[2]])
                 }
               }
               if (change[0] === 'sell') {
-                const ask = this.asks[productId].find([change[1], change[2]])
+                const ask = this._asks[productId].find([change[1], change[2]])
                 if (ask) {
                   if (bn(change[2]).eq(0)) {
-                    this.asks[productId].remove([change[1], change[2]])
+                    this._asks[productId].remove([change[1], change[2]])
                   } else {
-                    this.asks[productId].insert([change[1], change[2]])
+                    this._asks[productId].insert([change[1], change[2]])
                   }
                 } else {
-                  this.asks[productId].insert([change[1], change[2]])
+                  this._asks[productId].insert([change[1], change[2]])
                 }
               }
             }
@@ -354,23 +343,82 @@ export class CoinbaseService {
    * Get the best bid for a book
    * @param productId 
    */
-  public getBestBid(productId: string){
-    return this.bids[productId] ? this.bids[productId].max() : []
+  public getBestBid(productId: string) {
+    return this._bids[productId] ? this._bids[productId].max() : []
   }
 
   /**
    * Get the best ask for a book
    * @param productId 
    */
-  public getBestAsk(productId: string){
-    return this.asks[productId] ? this.asks[productId].min() : []
+  public getBestAsk(productId: string) {
+    return this._asks[productId] ? this._asks[productId].min() : []
   }
 
-}
+  // ----- internal methods --------
 
-export {
-  WebSocketChannelName,
-  WebSocketResponse,
-  WebSocketTickerMessage,
-  WebSocketResponseType
+  /**
+   * Connect to Coinbase Websocket
+   */
+  protected async _connect(): Promise<WebSocketClient> {
+    return new Promise((res, rej) => {
+      // on open
+      this._client.ws.on(WebSocketEvent.ON_OPEN, () => {
+        res(this._client.ws)
+      })
+
+      // on error
+      this._client.ws.on(WebSocketEvent.ON_ERROR, (e) => {
+        rej(e)
+      })
+
+      // connect
+      this._wsClient = this._client.ws.connect()
+    })
+  }
+
+  /**
+   * Create a subscription observable
+   */
+  protected async _createSubscriptionObserver(): Promise<Observable<CoinbaseSubscriptions>> {
+
+    // get coinbase socket connection
+    const conn = await this.connection
+
+    // setup observable
+    this._subscriptionMap = new Observable<CoinbaseSubscriptions>(subject => {
+      this._subscriptionMapObserver = subject 
+
+      // watch changes to subscriptions
+      conn.on(WebSocketEvent.ON_SUBSCRIPTION_UPDATE, subscriptions => {
+
+        // disconnect if no more subscriptions
+        if (subscriptions.channels.length === 0) {
+          subject.complete()
+          conn.disconnect()
+        }
+        // set active channels
+        this._channels = subscriptions.channels
+
+        // map back to CoinbaseSubscriptions
+        const sMap = {}
+        for (const c of subscriptions.channels) {
+          if (typeof sMap[c.name] === 'undefined') {
+            sMap[c.name] = []
+          }
+          sMap[c.name] = c.product_ids.map((p: string) => ({ productId: p }))
+        }
+        subject.next(sMap)
+      })
+
+      // on message error
+      conn.on(WebSocketEvent.ON_MESSAGE_ERROR, (e) => {
+        console.log('ON_MESSAGE_ERROR', e)
+        // TODO 
+        subject.error(e)
+      })
+    })
+
+    return this._subscriptionMap
+  }
 }

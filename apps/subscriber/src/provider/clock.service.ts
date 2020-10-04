@@ -4,16 +4,14 @@ export enum ClockIntervalText {
     OneSecond = '1s',
     OneMinute = '1m',
     FiveMinute = '5m',
-    FifteenMinute = '15m',
-    OneHour = '1h'
+    FifteenMinute = '15m'
 }
 
 export enum ClockInterval {
     '1s' = 1000,
     '1m' = 60000,
     '5m' = 300000,
-    '15m' = 900000,
-    '1h' = 3600000
+    '15m' = 900000
 }
 
 export type Clocks = {
@@ -24,7 +22,7 @@ export type ExchangeClocks = Record<string, Clocks>
 
 @Injectable()
 export class ClockService {
-    private clocks: ExchangeClocks = {}
+    protected _clocks: ExchangeClocks = {}
 
     /**
      * Start a clock
@@ -44,20 +42,20 @@ export class ClockService {
         ) => unknown
     ): ExchangeClocks {
         // init
-        if (typeof this.clocks[exchange] === 'undefined') {
-            this.clocks[exchange] = {}
+        if (typeof this._clocks[exchange] === 'undefined') {
+            this._clocks[exchange] = {}
         }
-        if (typeof this.clocks[exchange][interval] === 'undefined') {
-            this.clocks[exchange][interval] = {}
+        if (typeof this._clocks[exchange][interval] === 'undefined') {
+            this._clocks[exchange][interval] = {}
         }
 
         // reset
-        if (this.clocks[exchange][interval][pair]) {
-            clearInterval(this.clocks[exchange][interval][pair])
+        if (this._clocks[exchange][interval][pair]) {
+            clearInterval(this._clocks[exchange][interval][pair])
         }
 
         // start
-        this.clocks[exchange][interval][pair] = setInterval(
+        this._clocks[exchange][interval][pair] = setInterval(
             () => {
                 handler(interval, exchange,  pair)
             }, 
@@ -65,7 +63,7 @@ export class ClockService {
         )
         
         // return clocks
-        return this.clocks
+        return this._clocks
     }
 
     /**
@@ -81,7 +79,7 @@ export class ClockService {
         pair: string
     ): void {
        try {
-        clearInterval(this.clocks[exchange][interval][pair])
+        clearInterval(this._clocks[exchange][interval][pair])
        } catch(err){}
     }
 }

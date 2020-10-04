@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common'
+import { Controller } from '@nestjs/common'
 import { EventPattern } from '@nestjs/microservices'
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
@@ -34,20 +34,20 @@ export class EMA1226Controller {
         // check for running algos
         const algos = await this.redis.keys('algorithms:*')
         if (algos.length) {
-            // 1. get candles up to speed
-            // 2. calculate emas
-            // 3. set active flags
+            // 1. get params (including last trade)
+            // 2. get candles up to speed (prices)
+            // 3. set running flag?
         }
     }
 
     @EventPattern('clock:1s')
     async handleOneSec(data: any) {
-        // console.log(data)
+        console.log(data)
     }
 
     @EventPattern('clock:1m')
     async handleOneMin(data: any) {
-        console.log(data)
+        // console.log(data)
     }
 
     // ----------- TODO deprecated ------------

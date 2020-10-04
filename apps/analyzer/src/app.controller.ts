@@ -1,8 +1,16 @@
 import { Controller, Get } from '@nestjs/common'
 import { EventPattern } from '@nestjs/microservices'
 
-@Controller()
+@Controller('/analyzer')
 export class AppController {
+
+  @Get('/ping')
+  async handlePing() {
+      return {
+          pong: new Date().getTime(),
+          running: []
+      }
+  }
 
   @EventPattern('clock:1s')
   async handleOneSec(data: any) {
