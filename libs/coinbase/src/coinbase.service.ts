@@ -212,7 +212,20 @@ export class CoinbaseService {
       return Promise.resolve(this.subscriptions[productId])
     }
 
+    const conn = await this.connection
+
+    // setup observer
     this._observableSubscriptions[productId] = await this._createSubscriptionObserver(productId)
+
+    // subscribe
+    conn.subscribe({ 
+      name: WebSocketChannelName.TICKER,
+      product_ids: [productId]
+    })
+    conn.subscribe({ 
+      name: WebSocketChannelName.LEVEL2,
+      product_ids: [productId]
+    })
     
     return this._observableSubscriptions[productId]
   }
@@ -329,16 +342,6 @@ export class CoinbaseService {
       }
     })
     
-    // subscribe
-    conn.subscribe({ 
-      name: WebSocketChannelName.TICKER,
-      product_ids: [productId]
-    })
-    conn.subscribe({ 
-      name: WebSocketChannelName.LEVEL2,
-      product_ids: [productId]
-    })
-    
     return subscription
   }
 
@@ -349,7 +352,7 @@ export class CoinbaseService {
    * @param subject 
    * @param subscriptions 
    */
-  protected _handleSubscriptionUpdate(
+  protected async _handleSubscriptionUpdate(
     subscriptions: WebSocketSubscription
   ) {
     // disconnect if no more subscriptions
@@ -360,12 +363,15 @@ export class CoinbaseService {
 
     if (this._subscriptionMap) {
       // set subscription connected flag
-      subscriptions.channels.forEach((c: WebSocketChannel) => {
-        c.product_ids.forEach((p: string) => {
+      for(const c of subscriptions.channels) {
+        for(const p of c.product_ids) {
           this._subscriptionMap[p].connected.push(c.name)
+          if (!this._observers[p]) {
+            this._observableSubscriptions[p] = await this._createSubscriptionObserver(p)
+          }
           this._observers[p].next(this._subscriptionMap[p])
-        })
-      })
+        }
+      }
     }
     
   }

@@ -37,6 +37,6 @@ import { AppService } from './app.service'
 export class AppModule {
   async beforeApplicationShutdown() {
     console.log('GATEWAY: SHUTTING DOWN!')
-    // TODO emit shutdown event?
+    // TODO emit shutdown event, send notification
   }
 }

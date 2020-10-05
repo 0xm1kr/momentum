@@ -5,7 +5,7 @@ import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
 import { OrderSide } from 'coinbase-pro-node'
 import bn from 'big.js'
-import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText } from '@momentum/events'
+import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent } from '@momentum/events'
 import { CoinbaseService } from '@momentum/coinbase'
 
 type Trade = {
@@ -50,10 +50,12 @@ export class CoinbaseEMA1226Controller {
         if (algos.length) {
             for (const a of algos) {
                 const params = await this.redis.hgetall(a) as unknown
-                const lastTrade = await this.redis.rpop(`trades:coinbase:${(params as AlgorithmEvent).pair}`)
+                const lastTrade = await this.redis.hgetall(`trade:coinbase:${(params as AlgorithmEvent).pair}`)
                 this._start({
                     ...params as AlgorithmEvent,
-                    lastTrade
+                    lastTrade: Object.keys(lastTrade).length 
+                        ? `${lastTrade.side},${lastTrade.price},${lastTrade.time}` 
+                        : (params as AlgorithmEvent).lastTrade
                 })
             }
         }
@@ -64,8 +66,8 @@ export class CoinbaseEMA1226Controller {
         if (!this.activePairs[data.pair]) return
 
         if (this.activePairs[data.pair].ema26.length) {
-            const bestAsk = data.bestAsk[0]
-            const bestBid = data.bestBid[0]
+            const bestAsk = data.bestAsk
+            const bestBid = data.bestBid
             const ema12 = bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 1])
             const ema26 = bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 1])
             const ema12Slope = bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 1])
@@ -74,6 +76,7 @@ export class CoinbaseEMA1226Controller {
                 .minus(bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 2]))
 
             console.log('-------------------------')
+            console.log('-----',data.pair,'-----')
             console.log(`bestAsk ${data.bestAsk}`)
             console.log(`bestBid ${data.bestBid}`)
             console.log(`ema12 ${ema12}, ${ema12Slope}`)
@@ -112,7 +115,7 @@ export class CoinbaseEMA1226Controller {
                             price: order.price,
                             time: order.time
                         }
-                        this.redis.rpush(`trades:coinbase:${data.pair}`, `sell,${order.price},${order.time}`)
+                        this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, order)
                         this.activePairs[data.pair].lastBuy = null
                     } catch (err) {
                         console.log(err)
@@ -151,7 +154,7 @@ export class CoinbaseEMA1226Controller {
                             price: order.price,
                             time: order.time
                         }
-                        this.redis.rpush(`trades:coinbase:${data.pair}`, `buy,${order.price},${order.time}`)
+                        this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, order)
                         this.activePairs[data.pair].lastSell = null
                     } catch (err) {
                         console.log(err.response.data)
@@ -220,7 +223,6 @@ export class CoinbaseEMA1226Controller {
             startTime: startTime.getTime(),
             period: data.period,
             size: data.size,
-            // TODO last trade?
             lastBuy: null,
             lastSell: null,
             pricePeriods: [],
@@ -231,22 +233,20 @@ export class CoinbaseEMA1226Controller {
         // previous trades
         if (data.lastTrade) {
             const lt = data.lastTrade.split(',')
+            const order = {
+                side: lt[0],
+                size: data.size,
+                price: lt[1],
+                time: Number(lt[2]) || new Date().getTime()
+            }
             if (lt[0] === 'buy') {
-                this.activePairs[data.pair].lastBuy = {
-                    side: 'buy',
-                    size: data.size,
-                    price: lt[1],
-                    time: Number(lt[2]) || new Date().getTime()
-                }
+                this.activePairs[data.pair].lastBuy = order
             }
             if (lt[0] === 'sell') {
-                this.activePairs[data.pair].lastSell = {
-                    side: 'sell',
-                    size: data.size,
-                    price: lt[1],
-                    time: Number(lt[2]) || new Date().getTime()
-                }
+                this.activePairs[data.pair].lastSell = order
             }
+            // persist last trade
+            this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, order)
         }
 
         // log info
@@ -277,15 +277,34 @@ export class CoinbaseEMA1226Controller {
         this.activePairs[data.pair].pricePeriods.push(Number(data.avgTradePrice))
 
         // calculate moving averages
-        if (this.activePairs[data.pair].pricePeriods.length >= 26) {
+        if (this.activePairs[data.pair].pricePeriods.length >= 12) {
             this.activePairs[data.pair].ema12 = ema(this.activePairs[data.pair].pricePeriods, 12)
-            this.activePairs[data.pair].ema26 = ema(this.activePairs[data.pair].pricePeriods, 26)
+            
+            // emit for analysis
+            const length = this.activePairs[data.pair].ema12.length
+            this.momentum.emit('ema:coinbase', new EMAEvent(
+                'coinbase',
+                data.pair,
+                12,
+                this.activePairs[data.pair].ema12[length - 1],
+                new Date().getTime()
+            ))
+            
             // shift one off
             this.activePairs[data.pair].pricePeriods.shift()
+        }
+        if (this.activePairs[data.pair].pricePeriods.length >= 26) {
+            this.activePairs[data.pair].ema26 = ema(this.activePairs[data.pair].pricePeriods, 26)
 
-            // TODO emit to analyzer
-            // this.redis.set(`algorithm:ema1226:12:${this.pair}`, JSON.stringify(this.ema12))
-            // this.redis.set(`algorithm:ema1226:26:${this.pair}`, JSON.stringify(this.ema26))
+            // emit for analysis
+            const length = this.activePairs[data.pair].ema26.length
+            this.momentum.emit('ema:coinbase', new EMAEvent(
+                'coinbase',
+                data.pair,
+                26,
+                this.activePairs[data.pair].ema26[length - 1],
+                new Date().getTime()
+            ))
         }
     }
 }

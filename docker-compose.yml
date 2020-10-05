@@ -1,6 +1,7 @@
 version: '2'
+
 services:
-  
+
   redis:
     image: redis:alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -10,10 +11,56 @@ services:
     ports:
       - "6379:6379"
 
-  # postgis:
-  #   image: "mdillon/postgis"
-  #   environment:
-  #     - POSTGRES_USER=momentumpostgis
-  #     - POSTGRES_PASSWORD=momentumpostgis
-  #   ports:
-  #     - "5432:5432"
+  elasticsearch:
+    build:
+      context: elk/elasticsearch/
+      args:
+        ELK_VERSION: "7.0.1"
+    volumes:
+      - ./elk/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - $PWD/data/es:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      ES_JAVA_OPTS: "-Xmx256m -Xms256m"
+      ELASTIC_PASSWORD: "changeme"
+    networks:
+      - elk
+
+  logstash:
+    build:
+      context: elk/logstash/
+      args:
+        ELK_VERSION: "7.0.1"
+    volumes:
+      - ./elk/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./elk/logstash/pipeline:/usr/share/logstash/pipeline:ro
+    ports:
+      - "5000:5000"
+      - "9600:9600"
+    environment:
+      LS_JAVA_OPTS: "-Xmx256m -Xms256m"
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+  kibana:
+    build:
+      context: elk/kibana/
+      args:
+        ELK_VERSION: "7.0.1"
+    volumes:
+      - ./elk/kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    ports:
+      - "5601:5601"
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+networks:
+
+  elk:
+    driver: bridge

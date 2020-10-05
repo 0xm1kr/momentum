@@ -18,9 +18,6 @@ export class AppController {
   async onApplicationBootstrap() {
     // connect to store
     this.redis = await this.redisSvc.getClient('momentum-state')
-
-    // DEV ONLY
-    // await this.redis.flushall()
   }
 
   @Get('/subscriptions')
@@ -106,16 +103,29 @@ export class AppController {
 
   @Get('/trades')
   async getTrades() {
-    const keys = await this.redis.keys('trades:*')
+    const keys = await this.redis.keys('trade:*')
     return Promise.all(
       keys.map(async (k: string) => {
         const keys = k.split(':')
         const pair = keys[keys.length - 1]
         return {
-          [pair]: await this.redis.lrange(k, 0, 100)
+          [pair]: await this.redis.hgetall(k)
         }
       })
     )
+  }
+
+  @Post('/kill')
+  async kill() {
+    // TODO, sell everything and unsubscribe all 
+    await this.redis.flushall()
+
+    // TODO force restart all?
+    // emit('kill')
+
+    return {
+      message: 'momentum has been murdered.'
+    }
   }
 
 }

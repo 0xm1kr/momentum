@@ -22,13 +22,13 @@ export class AppService {
         const keys = await this.redis.keys('subscriptions:*')
 
         return Promise.all(
-        keys.map(async (k: string) => {
-            const params = k.split(':')
-            return {
-            exchange: params[1],
-            pairs: await this.redis.smembers(k)
-            }
-        })
+            keys.map(async (k: string) => {
+                const params = k.split(':')
+                return {
+                    exchange: params[1],
+                    pairs: await this.redis.smembers(k)
+                }
+            })
         )
     }
 }

@@ -160,16 +160,20 @@ export class ExchangeSubscriberService {
       bestAsk,
       avgTradePrice,
       avgTradeSize
-      // TODO liquidity calculations
+      // TODO liquidity calculations?
     )
 
     // tell everyone what's up
     this.momentum.emit(`clock:${interval}:${exchange}`, ev)
 
-    // clear data 
-    // TODO max interval > 15min?
-    if (interval === '15m' && this.updates?.[exchange]?.[pair].length) {
-      this.updates[exchange][pair] = []
+    // clear data each hour
+    // TODO better way to do this?
+    if (interval === '1m' && this.updates?.[exchange]?.[pair].length) {
+      const lastIndex = this.updateTimes?.[exchange]?.[pair]?.findIndex((t) => t < (now - (3600 * 1000)))
+      const updates = this.updates?.[exchange]?.[pair]?.slice(0, lastIndex)
+      if (updates.length) {
+        this.updates[exchange][pair] = []
+      }
     }
   }
 
@@ -177,7 +181,7 @@ export class ExchangeSubscriberService {
    * Record a ticker price
    * 
    * @param exchange 
-   * @param m 
+   * @param update 
    */
   private _recordUpdate(exchange: string, update: SubscriptionUpdate) {
     const pair = update.pair
