@@ -39,6 +39,7 @@ export class AppController {
       side: data.side,
       size: Number(data.size),
       price: Number(data.price),
+      delta: Number(data.delta),
       time: data.time
     })
   }

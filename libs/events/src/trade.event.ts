@@ -5,6 +5,7 @@ export class TradeEvent {
     size: string
     price: string
     time: number
+    delta: number
 
     /**
      * Handle a moving average update event
@@ -17,12 +18,14 @@ export class TradeEvent {
         side: string,
         size: string,
         price: string,
-        time: number
+        time: number,
+        delta: number
     ) {
         this.pair = pair
         this.side = side
         this.size = size
         this.price = price
         this.time = time
+        this.delta = delta
     }
 }
