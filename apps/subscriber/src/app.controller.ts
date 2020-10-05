@@ -19,14 +19,14 @@ export class AppController {
     // connect to store
     this.redis = await this.redisSvc.getClient('momentum-state')
 
-    // init cb subscriptions
+    // init existing cb subscriptions
     const cbSubs = await this.redis.smembers('subscriptions:coinbase')
     if (cbSubs.length) {
       // subscribe
       cbSubs.forEach(s => this.exSubSvc.subscribe(s, 'coinbase'))
     }
 
-    // init alpaca subscriptions
+    // init existing alpaca subscriptions
     const alpSubs = await this.redis.smembers('subscriptions:alpaca')
     if (alpSubs.length) {
       // subscribe

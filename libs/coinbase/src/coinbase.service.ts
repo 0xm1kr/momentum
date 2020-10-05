@@ -207,12 +207,13 @@ export class CoinbaseService {
    */
   public async subscribe(productId: string): Promise<Observable<CoinbaseSubscription>> {
 
+    // get connection
+    const conn = await this.connection
+
     // resubscribe or refresh?
     if (this.subscriptions[productId]) {
       return Promise.resolve(this.subscriptions[productId])
     }
-
-    const conn = await this.connection
 
     // setup observer
     this._observableSubscriptions[productId] = await this._createSubscriptionObserver(productId)
@@ -262,11 +263,13 @@ export class CoinbaseService {
     return new Promise((res, rej) => {
       // on open
       this._client.ws.on(WebSocketEvent.ON_OPEN, () => {
+        console.log('coinbase connected')
         res(this._client.ws)
       })
 
       // on error
       this._client.ws.on(WebSocketEvent.ON_ERROR, (e) => {
+        console.error(e)
         this._wsClient = null
         rej(e)
       })
@@ -360,12 +363,13 @@ export class CoinbaseService {
       this._client.ws.disconnect()
       this._wsClient = null
     }
-
     if (this._subscriptionMap) {
       // set subscription connected flag
       for(const c of subscriptions.channels) {
         for(const p of c.product_ids) {
-          this._subscriptionMap[p].connected.push(c.name)
+          if (!this._subscriptionMap[p].connected.includes(c.name)) {
+            this._subscriptionMap[p].connected.push(c.name)
+          }
           if (!this._observers[p]) {
             this._observableSubscriptions[p] = await this._createSubscriptionObserver(p)
           }
@@ -389,7 +393,7 @@ export class CoinbaseService {
     // TODO
     // this._observers[].error(error)
     // delete this._subscriptionMap[productId]
-    console.log(error)
+    console.error(error)
   }
 
   /**
