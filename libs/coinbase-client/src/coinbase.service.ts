@@ -268,7 +268,7 @@ export class CoinbaseService {
       // on open
       this._client.ws.on(WebSocketEvent.ON_OPEN, () => {
         console.log('Coinbase connection established')
-        console.log('Active subscriptions:', Object.keys(this.subscriptions))
+        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
 
         // init heartbeat
         this._handleHeartBeat()
@@ -283,7 +283,7 @@ export class CoinbaseService {
       // on close
       this._client.ws.on(WebSocketEvent.ON_CLOSE, () => {
         console.log('Coinbase connection closed!')
-        console.log('active subscriptions:', Object.keys(this.subscriptions))
+        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
         if (this._heartbeat) {
           clearTimeout(this._heartbeat)
         }
@@ -329,7 +329,7 @@ export class CoinbaseService {
           this._wsClient.removeEventListener('message', this._handleHeartBeatMessage)
           this._wsClient.addEventListener('message', this._handleHeartBeatMessage.bind(this))
       } catch(err) {
-        console.error('wsClient connection failed')
+        console.error('Coinbase wsClient connection failed')
         rej(err)
       }
     })
@@ -425,7 +425,7 @@ export class CoinbaseService {
     // TODO
     // this._observers[].error(error)
     // delete this._subscriptionMap[productId]
-    console.error('SUBUSCRIPTION ERROR', error)
+    console.error('Coinbase subscription error', error)
   }
 
   /**

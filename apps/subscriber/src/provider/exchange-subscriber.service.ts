@@ -88,6 +88,7 @@ export class ExchangeSubscriberService {
     switch (exchange) {
       case 'coinbase':
         await this._subscribeToCoinbasePair(pair)
+        break;
       case 'alpaca':
         // TODO more than USD?
         const symbol = pair.split('-')[0] 

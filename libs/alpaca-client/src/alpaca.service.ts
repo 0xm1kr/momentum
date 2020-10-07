@@ -334,7 +334,7 @@ export class AlpacaService {
     const clock = await this._initClock()
     clock.subscribe((c) => {
       if (!c.isOpen) {
-        console.log(`Markets closed, markets re-open in ${Math.round(c?.timeToOpen)}min`)
+        console.log(`Alpaca markets closed, markets re-open in ${Math.round(c?.timeToOpen)}min`)
       }
     })
 
@@ -354,12 +354,16 @@ export class AlpacaService {
   protected async _handleSubscriptionMessage(
     message: Record<string, any>
   ) {
-    console.log(message)
 
     // handle error
     if (message?.data?.error) {
       console.error(`Alpaca socket error ${message?.data?.error}`)
       return
+    }
+
+    // generic logging
+    if (message?.data) {
+      console.log(message)
     }
 
     // set up heart beat
