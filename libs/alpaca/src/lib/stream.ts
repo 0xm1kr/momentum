@@ -165,4 +165,10 @@ export class AlpacaStream extends EventEmitter {
       })
     )
   }
+
+  close() {
+    if (this.connection.OPEN) {
+      this.connection.close()
+    }
+  }
 }

@@ -27,7 +27,9 @@ export type Trade = {
   price: string
   size: string
   timestamp: number // unix
-  side: string
+  side?: string
+  flags?: string[]
+  exchange?: string 
 }
 export type SubscriptionUpdate = {
   pair: string
@@ -87,8 +89,8 @@ export class ExchangeSubscriberService {
       case 'coinbase':
         await this._subscribeToCoinbasePair(pair)
       case 'alpaca':
-        // TODO non-USD markets?
-        const symbol = pair.split('-')?.[0]
+        // TODO more than USD?
+        const symbol = pair.split('-')[0] 
         await this._subscribeToAlpacaPair(symbol)
         break
       default:
@@ -99,7 +101,7 @@ export class ExchangeSubscriberService {
     if (!this.clockSvc.clocks?.[exchange]?.[pair]) {
       Object.values(ClockIntervalText).forEach(
         (i: ClockIntervalText) => this.clockSvc.start(
-          'coinbase', i, pair, this._clockEventHandler.bind(this)
+          exchange, i, pair, this._clockEventHandler.bind(this)
         )
       )
     }
@@ -120,9 +122,7 @@ export class ExchangeSubscriberService {
         this.coinbaseSvc.unsubscribe(pair)
         break
       case 'alpaca':
-        // TODO non-USD markets?
-        const symbol = pair.split('-')?.[0]
-        this.alpacaSvc.unsubscribe(symbol)
+        this.alpacaSvc.unsubscribe(pair)
         break
       default:
         throw new Error('invalid exchange')
@@ -221,7 +221,7 @@ export class ExchangeSubscriberService {
         const subscription = await this.coinbaseSvc.subscribe(pair)
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(500)))
+          .pipe(throttle(() => interval(10)))
           .subscribe((sub) => {
             // setup handler
             this._handleCoinbaseSubscriptionUpdate(sub)
@@ -246,7 +246,6 @@ export class ExchangeSubscriberService {
   private _handleCoinbaseSubscriptionUpdate(update: CoinbaseSubscription) {
     const bestBid = update.book.bids.max()
     const bestAsk = update.book.asks.min()
-    // TODO calc liquidity within % of mid
 
     // check ticker update is unique
     const lastUpdate = this.updates['coinbase'][update.productId]?.[0]
@@ -265,8 +264,6 @@ export class ExchangeSubscriberService {
       lastTrade,
       bestBid,
       bestAsk,
-      // bidLiquidity: string
-      // askLiquidity: string
       timestamp: update.lastUpdate
     })
   }
@@ -284,7 +281,7 @@ export class ExchangeSubscriberService {
         const subscription = await this.alpacaSvc.subscribe(pair)
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(100)))
+          .pipe(throttle(() => interval(10)))
           .subscribe((sub) => {
             // setup handler
             this._handleAlpacaSubscriptionUpdate(sub)
@@ -307,29 +304,30 @@ export class ExchangeSubscriberService {
    * @param update 
    */
   private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
-    const bestBid = update.quotes?.[0]
-    const bestAsk = update.quotes?.[1]
-    // TODO calc liquidity within % of mid
-
+    const bestBid = update.book?.bids?.max()
+    const bestAsk = update.book?.asks?.min()
+    
     // check ticker update is unique
-    const lastUpdate = this.updates['alpaca'][update.symbol]?.[0]
-    const changed = lastUpdate ? (String(lastUpdate?.lastTrade?.id) !== String(update.ticker?.trade_id)) : false
-    const lastTrade = changed ? {
-      id: String(update.ticker?.trade_id),
-      price: update.ticker?.price,
-      size: update.ticker?.last_size,
-      timestamp: new Date(update.ticker?.time).getTime(), // unix
-      side: update.ticker?.side
+    // TODO more than USD?
+    const pair = `${update.symbol}-USD`
+    const lastUpdate = this.updates['alpaca'][pair]?.[0]
+    const changed = lastUpdate ? (String(lastUpdate?.lastTrade?.id) !== String(update.ticker?.i)) : false
+    const lastTrade: Trade = changed ? {
+      id: String(update.ticker?.i),
+      price: update.ticker?.p,
+      size: update.ticker?.s,
+      timestamp: update.ticker?.t, // unix
+      // side: null, // doesnt exist?
+      flags: update.ticker?.c,
+      exchange: update.ticker?.x
     } : null
     
     // record update
     this._recordUpdate('alpaca', {
-      pair: update.symbol,
+      pair,
       lastTrade,
-      bestBid,
-      bestAsk,
-      // bidLiquidity: string
-      // askLiquidity: string
+      bestBid: bestBid ? [bestBid.p, bestBid.s] : null,
+      bestAsk: bestBid ? [bestAsk.p, bestAsk.s] : null,
       timestamp: update.lastUpdate
     })
   }

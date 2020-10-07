@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common'
 import { Observable, Observer } from 'rxjs'
-import { RBTree } from 'bintrees'
 import { AlpacaClient, AlpacaStream, PlaceOrder, Clock } from '@momentum/alpaca'
+import { RBTree } from 'bintrees'
 
 export type AlpacaClock = {
   isOpen: boolean,
@@ -14,11 +14,17 @@ export type AlpacaClock = {
 
 export type Granularity = '1Min' | '5Min' | '15Min' | '1D'
 
+export type Book = {
+  bids: Record<string, RBTree<string[]>>
+  asks: Record<string, RBTree<string[]>>
+}
+
 export type AlpacaSubscription = {
   symbol: string
   connected: string[]
   unsubscribe?: () => void
-  quotes: any
+  book?: Book
+  quote?: any
   ticker?: any
   lastUpdate?: number // unix time
   lastUpdateProperty?: string // which property was updated
@@ -32,12 +38,12 @@ export class AlpacaService {
   protected _client!: AlpacaClient
   protected _stream!: AlpacaStream
 
-  protected _marketsOpen!: boolean
   protected _heartbeatTimeout = 30000
   protected _clockCheckInterval = 30000
   protected _connected = false
   protected _heartbeat!: NodeJS.Timeout
   protected _lastHeartBeat: number = null
+  protected _clock!: AlpacaClock
   protected _observableClock: Observable<AlpacaClock>
   protected _observableSubscriptions: AlpacaSubscriptions = {}
   protected _subscriptionMap: Record<string, AlpacaSubscription> = {}
@@ -54,8 +60,13 @@ export class AlpacaService {
     })
   }
 
-  public get marketsOpen() {
-    return this._marketsOpen
+  async beforeApplicationShutdown() {
+    console.log('ALPACA: SHUTTING DOWN!')
+    this._stream.close()
+  }
+
+  public get marketClock() {
+    return this._clock
   }
 
   public get connection(): Promise<AlpacaStream> {
@@ -84,17 +95,17 @@ export class AlpacaService {
 
     // setup
     const result = await this._client.getClock()
-    let clock = this._calculateClock(result)
+    this._clock = this._calculateClock(result)
 
     // create observable
     this._observableClock = new Observable(subject => {
-      subject.next(clock)
+      subject.next(this._clock)
       // TODO clear on error?
-      const intvl = setInterval(async () => {
+      const intvl = setInterval((async () => {
         const result = await this._client.getClock()
-        clock = this._calculateClock(result)
-        subject.next(clock)
-      }, this._clockCheckInterval)
+        this._clock = this._calculateClock(result)
+        subject.next(this._clock)
+      }).bind(this), this._clockCheckInterval)
     })
 
     return this._observableClock
@@ -179,7 +190,7 @@ export class AlpacaService {
     }
 
     // setup observer
-    this._observableSubscriptions[symbol] = await this._createSubscriptionObserver(symbol)
+    await this._createSubscriptionObserver(symbol)
 
     // subscribe
     conn.subscribe([`T.${symbol}`, `Q.${symbol}`])
@@ -222,8 +233,6 @@ export class AlpacaService {
     const close = clock.next_close.getTime()
     const timeToOpen = (open - now) / 60 / 1000
     const timeToClose = (close - now) / 60 / 1000
-
-    this._marketsOpen = clock.is_open
 
     return {
       isOpen: clock.is_open,
@@ -282,24 +291,24 @@ export class AlpacaService {
     // connect
     const conn = await this.connection
 
+    if (this._observableSubscriptions[symbol]) {
+      return this._observableSubscriptions[symbol]
+    }
+
     // init subscription
     this._subscriptionMap[symbol] = {
       symbol,
       connected: [],
       ticker: null,
-      quotes: []
-      // book: {
-      //   bids: new RBTree(
-      //     (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
-      //   ),
-      //   asks: new RBTree(
-      //     (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
-      //   )
-      // }
+      quote: null,
+      book: {
+        bids: new RBTree((a, b) => (a.p - b.p || a.t - b.t)),
+        asks: new RBTree((a, b) => (a.p - b.p || a.t - b.t))
+      }
     }
 
     // setup observable
-    const subscription = new Observable<AlpacaSubscription>(subject => {
+    this._observableSubscriptions[symbol] = new Observable<AlpacaSubscription>(subject => {
       this._observers[symbol] = subject
 
       // setup unsubscribe function
@@ -310,7 +319,7 @@ export class AlpacaService {
       }
     })
 
-    return subscription
+    return this._observableSubscriptions[symbol]
   }
 
   /**
@@ -320,10 +329,14 @@ export class AlpacaService {
    */
   protected async _handleStreamAuth(res: (stream: AlpacaStream) => void) {
     console.log('Alpaca connection established')
-    console.log('Active subscriptions:', Object.keys(this.subscriptions))
 
     // init clock
-    this._initClock()
+    const clock = await this._initClock()
+    clock.subscribe((c) => {
+      if (!c.isOpen) {
+        console.log(`Markets closed, markets re-open in ${Math.round(c?.timeToOpen)}min`)
+      }
+    })
 
     // init heartbeat
     this._initHeartBeat()
@@ -342,25 +355,32 @@ export class AlpacaService {
     message: Record<string, any>
   ) {
     console.log(message)
+
+    // handle error
+    if (message?.data?.error) {
+      console.error(`Alpaca socket error ${message?.data?.error}`)
+      return
+    }
+
     // set up heart beat
-    this._handleHeartBeatMessage.bind(this)
+    this._handleHeartBeatMessage.call(this)
 
     if ('stream' in message) {
       const subscriptions = message.data?.streams
-
-      if (subscriptions && Object.keys(this._subscriptionMap)?.length)
+      if (subscriptions?.length && Object.keys(this._subscriptionMap)?.length) {
         // set subscription connected flags
         for (const s of subscriptions) {
           const symbol = s.split('.')[1]
+          if (!this._observers[symbol]) {
+            await this._createSubscriptionObserver(symbol)
+          }
           if (!this._subscriptionMap[symbol].connected.includes(s)) {
             this._subscriptionMap[symbol].connected.push(s)
-          }
-          if (!this._observers[symbol]) {
-            this._observableSubscriptions[symbol] = await this._createSubscriptionObserver(s)
           }
           this._observers[symbol].next(this._subscriptionMap[symbol])
         }
       // TODO handle unsubscribe?
+      }
     }
   }
 
@@ -373,16 +393,15 @@ export class AlpacaService {
   protected _handleSubscriptionTradeMessage(
     message: Record<string, any>
   ) {
-    console.log(message)
-    // const symbol = message.symbol
+    const symbol = message.T
 
-    // // event fired without initialized subscription?
-    // if (!this._subscriptionMap?.[symbol]) return
+    // event fired without initialized subscription?
+    if (!this._subscriptionMap?.[symbol]) return
 
-    // this._subscriptionMap[symbol].ticker = message
-    // this._subscriptionMap[symbol].lastUpdateProperty = 'ticker'
-    // this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
-    // this._observers[symbol].next(this._subscriptionMap[symbol])
+    this._subscriptionMap[symbol].ticker = message
+    this._subscriptionMap[symbol].lastUpdateProperty = 'ticker'
+    this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
+    this._observers[symbol].next(this._subscriptionMap[symbol])
   }
 
   /**
@@ -394,48 +413,33 @@ export class AlpacaService {
   protected _handleSubscriptionQuoteMessage(
     message: Record<string, any>
   ) {
-    console.log(message)
-    // const symbol = (message as any).symbol
+    const symbol = message.T
 
-    // // event fired after unsubscribe
-    // if (!this._subscriptionMap?.[symbol]) return
+    // event fired without initialized subscription?
+    if (!this._subscriptionMap?.[symbol]) return
 
-    // // handle update
-    // if (message.type === WebSocketResponseType.LEVEL2_UPDATE) {
+    this._subscriptionMap[symbol].quote = message
+    
+    const bid = {
+      p: message.p,
+      s: message.s,
+      t: message.t,
+      x: message.x
+    }
+    const ask = {
+      p: message.P,
+      s: message.S,
+      t: message.t,
+      x: message.X
+    }
+    this._subscriptionMap[symbol].book.bids.insert(bid)
+    this._subscriptionMap[symbol].book.asks.insert(ask)
 
-    //   for (let c = 0; c < (message as any).changes.length; c++) {
-    //     const change = (message as any).changes[c]
-    //     if (change[0] === 'buy') {
-    //       const bid = this._subscriptionMap[symbol].book.bids.find([change[1], change[2]])
-    //       if (bid) {
-    //         if (bn(change[2]).eq(0)) {
-    //           this._subscriptionMap[symbol].book.bids.remove([change[1], change[2]])
-    //         } else {
-    //           this._subscriptionMap[symbol].book.bids.insert([change[1], change[2]])
-    //         }
-    //       } else {
-    //         this._subscriptionMap[symbol].book.bids.insert([change[1], change[2]])
-    //       }
-    //     }
+    // TODO clear out old/outdated quotes?
 
-    //     if (change[0] === 'sell') {
-    //       const ask = this._subscriptionMap[symbol].book.asks.find([change[1], change[2]])
-    //       if (ask) {
-    //         if (bn(change[2]).eq(0)) {
-    //           this._subscriptionMap[symbol].book.asks.remove([change[1], change[2]])
-    //         } else {
-    //           this._subscriptionMap[symbol].book.asks.insert([change[1], change[2]])
-    //         }
-    //       } else {
-    //         this._subscriptionMap[symbol].book.asks.insert([change[1], change[2]])
-    //       }
-    //     }
-    //   }
-
-    //   this._subscriptionMap[symbol].lastUpdateProperty = 'book'
-    //   this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
-    //   this._observers[symbol].next(this._subscriptionMap[symbol])
-    // }
+    this._subscriptionMap[symbol].lastUpdateProperty = 'quote'
+    this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
+    this._observers[symbol].next(this._subscriptionMap[symbol])
   }
 
   /**
@@ -450,15 +454,13 @@ export class AlpacaService {
    */
   protected _initHeartBeat() {
     const activeSubs = Object.keys(this._subscriptionMap)?.length
-    if (activeSubs && this._heartbeat && this._marketsOpen) {
+    if (activeSubs && this._heartbeat && this._clock?.isOpen) {
       const now = new Date().getTime()
       if ((now - this._lastHeartBeat) > this._heartbeatTimeout) {
         throw new Error('Alpaca heartbeat timed out!')
       }
-      this._heartbeat = setTimeout(this._initHeartBeat.bind(this), this._heartbeatTimeout)
-    } else {
-      this._heartbeat = setTimeout(this._initHeartBeat.bind(this), this._heartbeatTimeout)
     }
+    this._heartbeat = setTimeout(this._initHeartBeat.bind(this), this._heartbeatTimeout)
   }
 
 }

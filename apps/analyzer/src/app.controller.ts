@@ -35,6 +35,7 @@ export class AppController {
   async handleCBTrade(data: TradeEvent) {
     this.appSvc.createDoc('trade', {
       exchange: 'coinbase',
+      source: 'coinbase',
       pair: data.pair,
       side: data.side,
       size: Number(data.size),
@@ -99,12 +100,30 @@ export class AppController {
 
   @EventPattern('trade:alpaca')
   async handleAlpTrade(data: any) {
-    console.log(data)
+    this.appSvc.createDoc('trade', {
+      exchange: data.exchange,
+      source: 'alpaca',
+      pair: data.pair,
+      side: data.side,
+      size: Number(data.size),
+      price: Number(data.price),
+      delta: Number(data.delta),
+      time: data.time
+    })
   }
 
   @EventPattern('clock:1m:alpaca')
   async handleAlpOneMin(data: ClockEvent) {
     console.log(data)
+    this.appSvc.createDoc('price-clock', {
+      ...data,
+      bestBid: Number(data.bestBid?.[0]),
+      bestBidDepth: Number(data.bestBid?.[1]),
+      bestAsk: Number(data.bestAsk?.[0]),
+      bestAskDepth: Number(data.bestAsk?.[1]),
+      avgTradePrice: Number(data.avgTradePrice),
+      avgTradeSize: Number(data.avgTradeSize)
+    })
   }
 
   @EventPattern('clock:5m:alpaca')

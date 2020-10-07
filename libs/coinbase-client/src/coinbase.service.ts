@@ -284,8 +284,8 @@ export class CoinbaseService {
       this._client.ws.on(WebSocketEvent.ON_CLOSE, () => {
         console.log('Coinbase connection closed!')
         console.log('active subscriptions:', Object.keys(this.subscriptions))
-        if (this._heartbeatTimeout) {
-          clearTimeout(this._heartbeatTimeout)
+        if (this._heartbeat) {
+          clearTimeout(this._heartbeat)
         }
       })
 
