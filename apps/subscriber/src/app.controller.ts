@@ -17,7 +17,7 @@ export class AppController {
 
   async onApplicationBootstrap() {
     // connect to store
-    this.redis = await this.redisSvc.getClient('momentum-state')
+    this.redis = this.redisSvc.getClient('momentum-state')
 
     // init existing cb subscriptions
     const cbSubs = await this.redis.smembers('subscriptions:coinbase')

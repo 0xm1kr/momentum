@@ -1,7 +1,6 @@
 import { NestFactory } from '@nestjs/core'
 import { MicroserviceOptions, Transport } from '@nestjs/microservices'
 import { AppModule } from './app.module'
-import { ExceptionFilter } from './rpc.exception.filter';
 
 async function bootstrap() {
   // Create redis transport
@@ -15,9 +14,6 @@ async function bootstrap() {
   
   // enable shutdown hook
   app.enableShutdownHooks();
-
-  // Add exception filter
-  app.useGlobalFilters(new ExceptionFilter());
   
   app.listen(
     () => {

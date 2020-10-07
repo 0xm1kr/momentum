@@ -12,23 +12,29 @@
     "baseUrl": "./",
     "incremental": true,
     "paths": {
-      "@momentum/coinbase": [
-        "libs/coinbase/src"
+      "@momentum/coinbase-client": [
+        "libs/coinbase-client/src"
       ],
-      "@momentum/coinbase/*": [
-        "libs/coinbase/src/*"
+      "@momentum/coinbase-client/*": [
+        "libs/coinbase-client/src/*"
       ],
-      "@momentum/alpaca": [
-        "libs/alpaca/src"
+      "@momentum/alpaca-client": [
+        "libs/alpaca-client/src"
       ],
-      "@momentum/alpaca/*": [
-        "libs/alpaca/src/*"
+      "@momentum/alpaca-client/*": [
+        "libs/alpaca-client/src/*"
       ],
       "@momentum/events": [
         "libs/events/src"
       ],
       "@momentum/events/*": [
         "libs/events/src/*"
+      ],
+      "@momentum/alpaca": [
+        "libs/alpaca/src"
+      ],
+      "@momentum/alpaca/*": [
+        "libs/alpaca/src/*"
       ]
     }
   }

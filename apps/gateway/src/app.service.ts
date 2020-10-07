@@ -12,7 +12,7 @@ export class AppService {
 
     async onApplicationBootstrap() {
         // connect to store
-        this.redis = await this.redisSvc.getClient('momentum-state')
+        this.redis = this.redisSvc.getClient('momentum-state')
     }
 
     /**

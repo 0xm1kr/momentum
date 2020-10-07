@@ -44,22 +44,22 @@
         "tsConfigPath": "apps/analyzer/tsconfig.app.json"
       }
     },
-    "coinbase": {
+    "coinbase-client": {
       "type": "library",
-      "root": "libs/coinbase",
+      "root": "libs/coinbase-client",
       "entryFile": "index",
-      "sourceRoot": "libs/coinbase/src",
+      "sourceRoot": "libs/coinbase-client/src",
       "compilerOptions": {
-        "tsConfigPath": "libs/coinbase/tsconfig.lib.json"
+        "tsConfigPath": "libs/coinbase-client/tsconfig.lib.json"
       }
     },
-    "alpaca": {
+    "alpaca-client": {
       "type": "library",
-      "root": "libs/alpaca",
+      "root": "libs/alpaca-client",
       "entryFile": "index",
-      "sourceRoot": "libs/alpaca/src",
+      "sourceRoot": "libs/alpaca-client/src",
       "compilerOptions": {
-        "tsConfigPath": "libs/alpaca/tsconfig.lib.json"
+        "tsConfigPath": "libs/alpaca-client/tsconfig.lib.json"
       }
     },
     "events": {
@@ -69,6 +69,15 @@
       "sourceRoot": "libs/events/src",
       "compilerOptions": {
         "tsConfigPath": "libs/events/tsconfig.lib.json"
+      }
+    },
+    "alpaca": {
+      "type": "library",
+      "root": "libs/alpaca",
+      "entryFile": "index",
+      "sourceRoot": "libs/alpaca/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/alpaca/tsconfig.lib.json"
       }
     }
   }

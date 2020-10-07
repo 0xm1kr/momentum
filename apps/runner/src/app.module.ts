@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common'
 import { RedisModule} from 'nestjs-redis'
 import { ConfigModule } from '@nestjs/config'
 import { ClientsModule, Transport } from '@nestjs/microservices'
-import { CoinbaseModule } from '@momentum/coinbase'
+import { CoinbaseModule } from '@momentum/coinbase-client'
 import { CoinbaseEMA1226Controller } from './coinbase-ema1226.controller'
 
 @Module({

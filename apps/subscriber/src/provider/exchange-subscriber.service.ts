@@ -3,17 +3,20 @@ import { ClientProxy } from '@nestjs/microservices'
 import { filter, throttle } from 'rxjs/operators'
 import bn from 'big.js'
 import {
-  Observable,
   CoinbaseService,
   CoinbaseSubscription
-} from '@momentum/coinbase'
+} from '@momentum/coinbase-client'
+import {
+  AlpacaService,
+  AlpacaSubscription
+} from '@momentum/alpaca-client'
 import { ClockEvent } from '@momentum/events/clock.event'
 import {
   ClockService,
   ClockIntervalText,
   ClockInterval
 } from './clock.service'
-import { interval } from 'rxjs'
+import { Observable, interval } from 'rxjs'
 
 export type ExchangeSubscription = Observable<CoinbaseSubscription> // | Observable<AlpacaSubscription>
 export type Subscription = Record<string, ExchangeSubscription>
@@ -46,6 +49,7 @@ export class ExchangeSubscriberService {
   constructor(
     @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
     private readonly coinbaseSvc: CoinbaseService,
+    private readonly alpacaSvc: AlpacaService,
     private readonly clockSvc: ClockService
   ) { }
 
@@ -83,7 +87,13 @@ export class ExchangeSubscriberService {
       case 'coinbase':
         await this._subscribeToCoinbasePair(pair)
       case 'alpaca':
-        await this._subscribeToAlpacaPair(pair)
+        // TODO non-USD markets?
+        const symbol = pair.split('-')?.[0]
+        await this._subscribeToAlpacaPair(symbol)
+        const clock = await this.alpacaSvc.clock
+
+        clock.subscribe(console.log)
+
         break
       default:
         throw new Error('invalid exchange')
@@ -114,7 +124,9 @@ export class ExchangeSubscriberService {
         this.coinbaseSvc.unsubscribe(pair)
         break
       case 'alpaca':
-        // this.alpacaSvc.unsubscribe(pair)
+        // TODO non-USD markets?
+        const symbol = pair.split('-')?.[0]
+        this.alpacaSvc.unsubscribe(symbol)
         break
       default:
         throw new Error('invalid exchange')
@@ -270,7 +282,26 @@ export class ExchangeSubscriberService {
    * @param pairs 
    */
   private _subscribeToAlpacaPair(pair: string) {
-    // TODO
+    return new Promise(async (res, rej) => {
+      let resolved = false
+      try {
+        const subscription = await this.alpacaSvc.subscribe(pair)
+        subscription
+          // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
+          .pipe(throttle(() => interval(100)))
+          .subscribe((sub) => {
+            // setup handler
+            this._handleAlpacaSubscriptionUpdate(sub)
+            // return once connected
+            if (sub.connected && !resolved) {
+              resolved = true
+              res(subscription)
+            }
+          }, rej)
+        } catch(err) {
+          rej(err)
+        }
+    })
   }
 
   /**
@@ -279,7 +310,31 @@ export class ExchangeSubscriberService {
    * 
    * @param update 
    */
-  // private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
-  //  TODO
-  // }
+  private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
+    const bestBid = update.quotes?.[0]
+    const bestAsk = update.quotes?.[1]
+    // TODO calc liquidity within % of mid
+
+    // check ticker update is unique
+    const lastUpdate = this.updates['alpaca'][update.symbol]?.[0]
+    const changed = lastUpdate ? (String(lastUpdate?.lastTrade?.id) !== String(update.ticker?.trade_id)) : false
+    const lastTrade = changed ? {
+      id: String(update.ticker?.trade_id),
+      price: update.ticker?.price,
+      size: update.ticker?.last_size,
+      timestamp: new Date(update.ticker?.time).getTime(), // unix
+      side: update.ticker?.side
+    } : null
+    
+    // record update
+    this._recordUpdate('alpaca', {
+      pair: update.symbol,
+      lastTrade,
+      bestBid,
+      bestAsk,
+      // bidLiquidity: string
+      // askLiquidity: string
+      timestamp: update.lastUpdate
+    })
+  }
 }

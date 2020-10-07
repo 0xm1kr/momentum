@@ -6,7 +6,7 @@ import { ema } from 'moving-averages'
 import { OrderSide } from 'coinbase-pro-node'
 import bn from 'big.js'
 import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
-import { CoinbaseService } from '@momentum/coinbase'
+import { CoinbaseService } from '@momentum/coinbase-client'
 
 type Trade = {
     side: string
@@ -43,7 +43,7 @@ export class CoinbaseEMA1226Controller {
 
     async onApplicationBootstrap() {
         // connect to store
-        this.redis = await this.redisSvc.getClient('momentum-state')
+        this.redis = this.redisSvc.getClient('momentum-state')
 
         // check for running algos
         const algos = await this.redis.keys('algorithms:ema1226:coinbase:*')
