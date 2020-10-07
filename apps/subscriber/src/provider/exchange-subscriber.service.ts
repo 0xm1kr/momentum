@@ -7,6 +7,10 @@ import {
   CoinbaseService,
   CoinbaseSubscription
 } from '@momentum/coinbase'
+import {
+  AlpacaSubscription,
+  AlpacaService
+} from '@momentum/alpaca'
 import { ClockEvent } from '@momentum/events/clock.event'
 import {
   ClockService,
@@ -46,6 +50,7 @@ export class ExchangeSubscriberService {
   constructor(
     @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
     private readonly coinbaseSvc: CoinbaseService,
+    private readonly alpacaSvc: AlpacaService,
     private readonly clockSvc: ClockService
   ) { }
 
@@ -114,7 +119,7 @@ export class ExchangeSubscriberService {
         this.coinbaseSvc.unsubscribe(pair)
         break
       case 'alpaca':
-        // this.alpacaSvc.unsubscribe(pair)
+        this.alpacaSvc.unsubscribe(pair)
         break
       default:
         throw new Error('invalid exchange')
@@ -270,7 +275,26 @@ export class ExchangeSubscriberService {
    * @param pairs 
    */
   private _subscribeToAlpacaPair(pair: string) {
-    // TODO
+    return new Promise(async (res, rej) => {
+      let resolved = false
+      try {
+        const subscription = await this.alpacaSvc.subscribe(pair)
+        subscription
+          // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
+          .pipe(throttle(() => interval(100)))
+          .subscribe((sub) => {
+            // setup handler
+            this._handleAlpacaSubscriptionUpdate(sub)
+            // return once connected
+            if (sub.connected && !resolved) {
+              resolved = true
+              res(subscription)
+            }
+          }, rej)
+        } catch(err) {
+          rej(err)
+        }
+    })
   }
 
   /**
@@ -279,7 +303,31 @@ export class ExchangeSubscriberService {
    * 
    * @param update 
    */
-  // private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
-  //  TODO
-  // }
+  private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
+    const bestBid = update.quotes?.[0]
+    const bestAsk = update.quotes?.[1]
+    // TODO calc liquidity within % of mid
+
+    // check ticker update is unique
+    const lastUpdate = this.updates['alpaca'][update.symbol]?.[0]
+    const changed = lastUpdate ? (String(lastUpdate?.lastTrade?.id) !== String(update.ticker?.trade_id)) : false
+    const lastTrade = changed ? {
+      id: String(update.ticker?.trade_id),
+      price: update.ticker?.price,
+      size: update.ticker?.last_size,
+      timestamp: new Date(update.ticker?.time).getTime(), // unix
+      side: update.ticker?.side
+    } : null
+    
+    // record update
+    this._recordUpdate('alpaca', {
+      pair: update.symbol,
+      lastTrade,
+      bestBid,
+      bestAsk,
+      // bidLiquidity: string
+      // askLiquidity: string
+      timestamp: update.lastUpdate
+    })
+  }
 }

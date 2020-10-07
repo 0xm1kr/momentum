@@ -8,7 +8,6 @@ import {
   OrderSide,
   WebSocketResponse,
   WebSocketTickerMessage,
-  WebSocketChannel,
   WebSocketResponseType,
   OrderBookLevel2,
   OrderBookLevel,
@@ -74,7 +73,6 @@ export class CoinbaseService {
   protected _wsClient!: ReconnectingWebSocket
   protected _heartbeat!: NodeJS.Timeout
   protected _lastHeartBeat: number = null
-  protected _channels: WebSocketChannel[] = []
   protected _observableSubscriptions: CoinbaseSubscriptions = {}
   protected _subscriptionMap: Record<string, CoinbaseSubscription> = {}
   protected _observers: Record<string, Observer<CoinbaseSubscription>> = {}

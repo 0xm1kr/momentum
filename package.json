@@ -22,6 +22,7 @@
     "test:e2e": "jest --config ./apps/momentum-v2/test/jest-e2e.json"
   },
   "dependencies": {
+    "@master-chief/alpaca": "^2.0.0",
     "@nestjs/common": "^7.0.0",
     "@nestjs/config": "^0.5.0",
     "@nestjs/core": "^7.0.0",
