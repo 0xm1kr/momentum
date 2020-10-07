@@ -90,10 +90,6 @@ export class ExchangeSubscriberService {
         // TODO non-USD markets?
         const symbol = pair.split('-')?.[0]
         await this._subscribeToAlpacaPair(symbol)
-        const clock = await this.alpacaSvc.clock
-
-        clock.subscribe(console.log)
-
         break
       default:
         throw new Error('invalid exchange')
@@ -180,7 +176,7 @@ export class ExchangeSubscriberService {
 
     // clear data each hour
     // TODO better way to do this?
-    if (interval === '1m' && this.updates?.[exchange]?.[pair].length) {
+    if (interval === '1m' && this.updates?.[exchange]?.[pair]?.length) {
       const lastIndex = this.updateTimes?.[exchange]?.[pair]?.findIndex((t) => t < (now - (3600 * 1000)))
       const updates = this.updates?.[exchange]?.[pair]?.slice(0, lastIndex)
       if (updates.length) {

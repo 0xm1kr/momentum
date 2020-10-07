@@ -32,7 +32,9 @@ export class AlpacaService {
   protected _client!: AlpacaClient
   protected _stream!: AlpacaStream
 
+  protected _marketsOpen!: boolean
   protected _heartbeatTimeout = 30000
+  protected _clockCheckInterval = 30000
   protected _connected = false
   protected _heartbeat!: NodeJS.Timeout
   protected _lastHeartBeat: number = null
@@ -52,6 +54,10 @@ export class AlpacaService {
     })
   }
 
+  public get marketsOpen() {
+    return this._marketsOpen
+  }
+
   public get connection(): Promise<AlpacaStream> {
     if (this._connected) {
       return Promise.resolve(this._stream)
@@ -64,7 +70,7 @@ export class AlpacaService {
       return Promise.resolve(this._observableClock)
     }
 
-    return this._getClock()
+    return this._initClock()
   }
 
   public get subscriptions() {
@@ -74,19 +80,21 @@ export class AlpacaService {
   /**
    * Get the Alpaca market clock
    */
-  public async _getClock(): Promise<Observable<AlpacaClock>> {
+  public async _initClock(): Promise<Observable<AlpacaClock>> {
 
     // setup
     const result = await this._client.getClock()
-    let clock = await this._calculateClock(result)
+    let clock = this._calculateClock(result)
 
+    // create observable
     this._observableClock = new Observable(subject => {
       subject.next(clock)
+      // TODO clear on error?
       const intvl = setInterval(async () => {
         const result = await this._client.getClock()
         clock = this._calculateClock(result)
         subject.next(clock)
-      }, 1000)
+      }, this._clockCheckInterval)
     })
 
     return this._observableClock
@@ -215,6 +223,8 @@ export class AlpacaService {
     const timeToOpen = (open - now) / 60 / 1000
     const timeToClose = (close - now) / 60 / 1000
 
+    this._marketsOpen = clock.is_open
+
     return {
       isOpen: clock.is_open,
       currentTime: clock.timestamp,
@@ -312,8 +322,11 @@ export class AlpacaService {
     console.log('Alpaca connection established')
     console.log('Active subscriptions:', Object.keys(this.subscriptions))
 
+    // init clock
+    this._initClock()
+
     // init heartbeat
-    this._handleHeartBeat()
+    this._initHeartBeat()
 
     // resolve
     this._connected = true
@@ -329,7 +342,7 @@ export class AlpacaService {
     message: Record<string, any>
   ) {
     console.log(message)
-
+    // set up heart beat
     this._handleHeartBeatMessage.bind(this)
 
     if ('stream' in message) {
@@ -435,16 +448,16 @@ export class AlpacaService {
   /**
    * handle heartbeat logic
    */
-  protected _handleHeartBeat() {
+  protected _initHeartBeat() {
     const activeSubs = Object.keys(this._subscriptionMap)?.length
-    if (activeSubs && this._heartbeat) {
+    if (activeSubs && this._heartbeat && this._marketsOpen) {
       const now = new Date().getTime()
       if ((now - this._lastHeartBeat) > this._heartbeatTimeout) {
         throw new Error('Alpaca heartbeat timed out!')
       }
-      this._heartbeat = setTimeout(this._handleHeartBeat.bind(this), this._heartbeatTimeout)
+      this._heartbeat = setTimeout(this._initHeartBeat.bind(this), this._heartbeatTimeout)
     } else {
-      this._heartbeat = setTimeout(this._handleHeartBeat.bind(this), this._heartbeatTimeout)
+      this._heartbeat = setTimeout(this._initHeartBeat.bind(this), this._heartbeatTimeout)
     }
   }
 

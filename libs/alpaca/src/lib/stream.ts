@@ -84,7 +84,6 @@ export class AlpacaStream extends EventEmitter {
           if (object.data.status == 'authorized') {
             this.authenticated = true
             this.emit('authenticated', this)
-            console.log('Connected to the websocket.')
           } else {
             this.connection.close()
             throw new Error(
