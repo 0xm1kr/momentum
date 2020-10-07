@@ -68,9 +68,12 @@ export type CoinbaseSubscriptions = Record<string, Observable<CoinbaseSubscripti
 
 @Injectable()
 export class CoinbaseService {
-
+  
+  protected _heartbeatTimeout = 30000
   protected _client!: CoinbasePro
   protected _wsClient!: ReconnectingWebSocket
+  protected _heartbeat!: NodeJS.Timeout
+  protected _lastHeartBeat: number = null
   protected _channels: WebSocketChannel[] = []
   protected _observableSubscriptions: CoinbaseSubscriptions = {}
   protected _subscriptionMap: Record<string, CoinbaseSubscription> = {}
@@ -260,11 +263,30 @@ export class CoinbaseService {
    * Connect to Coinbase Websocket
    */
   protected async _connect(): Promise<WebSocketClient> {
+    let resolved = false
     return new Promise((res, rej) => {
       // on open
       this._client.ws.on(WebSocketEvent.ON_OPEN, () => {
-        console.log('coinbase connected')
-        res(this._client.ws)
+        console.log('Coinbase connection established')
+        console.log('Active subscriptions:', Object.keys(this.subscriptions))
+
+        // init heartbeat
+        this._handleHeartBeat()
+
+        // resolve
+        if (!resolved) {
+          resolved = true
+          res(this._client.ws)
+        }
+      })
+
+      // on close
+      this._client.ws.on(WebSocketEvent.ON_CLOSE, () => {
+        console.log('Coinbase connection closed!')
+        console.log('active subscriptions:', Object.keys(this.subscriptions))
+        if (this._heartbeatTimeout) {
+          clearTimeout(this._heartbeatTimeout)
+        }
       })
 
       // on error
@@ -299,7 +321,17 @@ export class CoinbaseService {
       )
 
       // connect
-      this._wsClient = this._client.ws.connect()
+      try {
+          this._wsClient = this._client.ws.connect()
+
+          // implement custom heartbeat while waiting for:
+          // https://github.com/pladaria/reconnecting-websocket/issues/98
+          this._wsClient.removeEventListener('message', this._handleHeartBeatMessage)
+          this._wsClient.addEventListener('message', this._handleHeartBeatMessage.bind(this))
+      } catch(err) {
+        console.error('wsClient connection failed')
+        rej(err)
+      }
     })
   }
 
@@ -363,7 +395,7 @@ export class CoinbaseService {
       this._client.ws.disconnect()
       this._wsClient = null
     }
-    if (this._subscriptionMap) {
+    if (Object.keys(this._subscriptionMap)?.length) {
       // set subscription connected flag
       for(const c of subscriptions.channels) {
         for(const p of c.product_ids) {
@@ -393,7 +425,7 @@ export class CoinbaseService {
     // TODO
     // this._observers[].error(error)
     // delete this._subscriptionMap[productId]
-    console.error(error)
+    console.error('SUBUSCRIPTION ERROR', error)
   }
 
   /**
@@ -479,6 +511,29 @@ export class CoinbaseService {
       this._subscriptionMap[productId].lastUpdateProperty = 'book'
       this._subscriptionMap[productId].lastUpdate = new Date().getTime()
       this._observers[productId].next(this._subscriptionMap[productId])
+    }
+  }
+
+  /**
+   * Set last message date
+   */
+  protected _handleHeartBeatMessage() {
+    this._lastHeartBeat = new Date().getTime()
+  }
+
+  /**
+   * handle heartbeat logic
+   */
+  protected _handleHeartBeat() {
+    const activeSubs = Object.keys(this._subscriptionMap)?.length
+    if (activeSubs && this._heartbeat) {
+      const now = new Date().getTime()
+      if ((now - this._lastHeartBeat) > this._heartbeatTimeout) {
+        throw new Error('Coinbase heartbeat timed out!')
+      }
+      this._heartbeat = setTimeout(this._handleHeartBeat.bind(this), this._heartbeatTimeout)
+    } else {
+      this._heartbeat = setTimeout(this._handleHeartBeat.bind(this), this._heartbeatTimeout)
     }
   }
 }
