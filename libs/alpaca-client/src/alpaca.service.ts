@@ -167,10 +167,23 @@ export class AlpacaService {
 
     // subscribe
     // TODO subscribe / resubscribe all
-    const subs = Object.keys(this.subscriptions)
-    conn.subscribe([`T.${symbol}`, `Q.${symbol}`])
+    const subs = [`T.${symbol}`, `Q.${symbol}`]
+    Object.keys(this.subscriptions).forEach(s => {
+      subs.push(`T.${s}`)
+      subs.push(`Q.${s}`)
+    })
+    // unsubscribe but leave observables 
+    // allowing conn to auto re-subscribe to all
+    conn.unsubscribe(subs)
 
-    return this._observableSubscriptions[symbol]
+    // wait for this subscription to become active
+    return new Promise((res, rej) => {
+      this._observableSubscriptions[symbol].subscribe(o => {
+        if (o.connected) {
+          res(this._observableSubscriptions[symbol])
+        }
+      })
+    })
   }
 
   /**
@@ -182,12 +195,25 @@ export class AlpacaService {
     if (!this._subscriptionMap?.[symbol]) return
 
     try {
-      // unsubscribe
+      // unsubscribe (complete observable)
       this._subscriptionMap[symbol]?.unsubscribe()
+
       // remove data
       delete this._subscriptionMap[symbol]
       delete this._observableSubscriptions[symbol]
       delete this._observers[symbol]
+
+      // unsubscribe to
+      // trigger auto-rescribe
+      const subs = []
+      Object.keys(this.subscriptions).forEach(s => {
+        subs.push(`T.${s}`)
+        subs.push(`Q.${s}`)
+      })
+      ;(await (this.connection)).unsubscribe(subs)
+
+      // TODO await actual disconnect message?
+      
     } catch (err) {
       console.warn(err)
     }
@@ -312,7 +338,6 @@ export class AlpacaService {
       // setup unsubscribe function
       // TODO what if this fails?
       this._subscriptionMap[symbol].unsubscribe = function unsubscribe() {
-        conn.unsubscribe([`T.${symbol}`, `Q.${symbol}`])
         subject.complete()
       }
     })
@@ -352,6 +377,7 @@ export class AlpacaService {
   protected async _handleSubscriptionMessage(
     message: Record<string, any>
   ) {
+    // console.log(message)
 
     // handle error
     if (message?.data?.error) {
@@ -361,33 +387,46 @@ export class AlpacaService {
 
     // generic logging
     if (message?.data) {
-      // console.log(message)
+      if (message.stream == 'listening') {
+        const subs = message?.data?.streams
+        console.log('Alpaca active subscriptions', subs)
+      }
     }
 
     // set up heart beat
     this._handleHeartBeatMessage.call(this)
 
     if ('stream' in message) {
-      
-      if (message.stream === 'listening') {
-        const subs = message?.data?.streams
-        console.log('Alpaca active subscriptions:', subs)
-      } 
+      // syncronize local subs and connected subs
+      const subscriptions = message.data.streams
+      if (Object.keys(this._subscriptionMap)?.length) {
 
-      const subscriptions = message.data?.streams
-      if (subscriptions?.length && Object.keys(this._subscriptionMap)?.length) {
-        // set subscription connected flags
-        for (const s of subscriptions) {
-          const symbol = s.split('.')[1]
-          if (!this._observers[symbol]) {
-            await this._createSubscriptionObserver(symbol)
+        // connect
+        if (subscriptions && !subscriptions.length) {
+          
+          const subs = []
+          Object.keys(this.subscriptions).forEach(s => {
+            subs.push(`T.${s}`)
+            subs.push(`Q.${s}`)
+          })
+          ;(await this.connection).subscribe(subs)
+        } 
+        // setup subscribers
+        else {
+         
+          if (subscriptions) {
+            for (const s of subscriptions) {
+              const symbol = s.split('.')[1]
+              if (!this._observers[symbol]) {
+                await this._createSubscriptionObserver(symbol)
+              }
+              if (!this._subscriptionMap[symbol].connected.includes(s)) {
+                this._subscriptionMap[symbol].connected.push(s)
+              }
+              this._observers[symbol].next(this._subscriptionMap[symbol])
+            }
           }
-          if (!this._subscriptionMap[symbol].connected.includes(s)) {
-            this._subscriptionMap[symbol].connected.push(s)
-          }
-          this._observers[symbol].next(this._subscriptionMap[symbol])
         }
-      // TODO handle unsubscribe?
       }
     }
   }

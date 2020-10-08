@@ -29,8 +29,11 @@ export class AppController {
     // init existing alpaca subscriptions
     const alpSubs = await this.redis.smembers('subscriptions:alpaca')
     if (alpSubs.length) {
-      // subscribe
-      alpSubs.forEach(s => this.exSubSvc.subscribe(s, 'alpaca'))
+      // subscribe async
+      // TODO more efficient to handle all at once?
+      for(const s of alpSubs) {
+        await this.exSubSvc.subscribe(s, 'alpaca')
+      }
     }
   }
 

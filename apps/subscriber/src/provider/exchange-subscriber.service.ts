@@ -134,10 +134,10 @@ export class ExchangeSubscriberService {
   async unsubscribe(pair: string, exchange = 'coinbase') {
     switch (exchange) {
       case 'coinbase':
-        this.coinbaseSvc.unsubscribe(pair)
+        await this.coinbaseSvc.unsubscribe(pair)
         break
       case 'alpaca':
-        this.alpacaSvc.unsubscribe(pair)
+        await this.alpacaSvc.unsubscribe(pair)
         break
       default:
         throw new Error('invalid exchange')

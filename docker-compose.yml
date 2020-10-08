@@ -11,6 +11,11 @@ services:
     ports:
       - "6379:6379"
 
+  # alpacaproxy:
+  #   image: shlomik/alpaca-proxy-agent
+  #   ports:
+  #     - "8765:8765"
+
   elasticsearch:
     build:
       context: elk/elasticsearch/
