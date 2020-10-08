@@ -192,7 +192,7 @@ export class AlpacaService {
   * @param symbol 
   */
   public async unsubscribe(symbol: string) {
-    if (!this._subscriptionMap?.[symbol]) return
+    if (!this._subscriptionMap[symbol]) return
 
     try {
       // unsubscribe (complete observable)

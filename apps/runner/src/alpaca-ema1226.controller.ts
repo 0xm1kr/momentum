@@ -63,7 +63,7 @@ export class AlpacaEMA1226Controller {
     }
 
     @EventPattern('update:alpaca')
-    async handleOneSec(data: ClockEvent) {
+    async handleUpdate(data: ClockEvent) {
         if (!this.activePairs[data.pair]) return
 
         if (this.activePairs[data.pair].ema26.length) {
@@ -273,8 +273,7 @@ export class AlpacaEMA1226Controller {
             '15m' : '15Min'
         }
         const candles = await this.alpSvc.getBars(symbol, clockP[data.period])
-        console.log(candles)
-        this.activePairs[data.pair].pricePeriods = candles[symbol].map(c => (c.close))
+        this.activePairs[data.pair].pricePeriods = candles[symbol].map(c => (c.c))
     }
 
     /**

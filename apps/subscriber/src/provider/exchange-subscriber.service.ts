@@ -238,7 +238,7 @@ export class ExchangeSubscriberService {
         const subscription = await this.coinbaseSvc.subscribe(pair)
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(10)))
+          .pipe(throttle(() => interval(100)))
           .subscribe((sub) => {
             // setup handler
             this._handleCoinbaseSubscriptionUpdate(sub)
@@ -264,6 +264,8 @@ export class ExchangeSubscriberService {
     const bestBid = update.book.bids.max()
     const bestAsk = update.book.asks.min()
 
+    if (!bestBid || !bestAsk) return
+
     // check ticker update is unique
     const lastUpdate = this.updates['coinbase'][update.productId]?.[0]
     const changed = lastUpdate ? (String(lastUpdate?.lastTrade?.id) !== String(update.ticker?.trade_id)) : false
@@ -274,8 +276,7 @@ export class ExchangeSubscriberService {
       timestamp: new Date(update.ticker?.time).getTime(), // unix
       side: update.ticker?.side
     } : null
-    
-    // record update
+
     this._recordUpdate('coinbase', {
       pair: update.productId,
       lastTrade,
@@ -300,7 +301,7 @@ export class ExchangeSubscriberService {
         const subscription = await this.alpacaSvc.subscribe(symbol)
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(10)))
+          .pipe(throttle(() => interval(100)))
           .subscribe((sub) => {
             // setup handler
             this._handleAlpacaSubscriptionUpdate(sub)
@@ -325,6 +326,8 @@ export class ExchangeSubscriberService {
   private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
     const bestBid = update.book?.bids?.max()
     const bestAsk = update.book?.asks?.min()
+
+    if (!bestBid || !bestAsk) return
     
     // check ticker update is unique
     // TODO more than USD?

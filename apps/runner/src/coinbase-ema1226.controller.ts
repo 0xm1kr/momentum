@@ -64,7 +64,7 @@ export class CoinbaseEMA1226Controller {
     }
 
     @EventPattern('update:coinbase')
-    async handleOneSec(data: ClockEvent) {
+    async handleUpdate(data: ClockEvent) {
         if (!this.activePairs[data.pair]) return
 
         if (this.activePairs[data.pair].ema26.length) {
