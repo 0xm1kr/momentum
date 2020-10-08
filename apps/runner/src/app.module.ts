@@ -3,7 +3,9 @@ import { RedisModule} from 'nestjs-redis'
 import { ConfigModule } from '@nestjs/config'
 import { ClientsModule, Transport } from '@nestjs/microservices'
 import { CoinbaseModule } from '@momentum/coinbase-client'
+import { AlpacaModule } from '@momentum/alpaca-client'
 import { CoinbaseEMA1226Controller } from './coinbase-ema1226.controller'
+import { AlpacaEMA1226Controller } from './alpaca-ema1226.controller'
 
 @Module({
   imports: [
@@ -27,10 +29,13 @@ import { CoinbaseEMA1226Controller } from './coinbase-ema1226.controller'
       keyPrefix: 'mmtm'
     }),
     // Coinbase
-    CoinbaseModule
+    CoinbaseModule,
+    // Alpaca
+    AlpacaModule
   ],
   controllers: [
-    CoinbaseEMA1226Controller
+    CoinbaseEMA1226Controller,
+    AlpacaEMA1226Controller
   ],
   providers: [],
 })
