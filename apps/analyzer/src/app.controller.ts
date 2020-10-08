@@ -2,7 +2,6 @@ import { Controller, Get } from '@nestjs/common'
 import { EventPattern } from '@nestjs/microservices'
 import { TradeEvent, ClockEvent, EMAEvent } from '@momentum/events'
 import { AppService } from './app.service'
-import { resolve as resolvePath } from 'path'
 
 @Controller('/analyzer')
 export class AppController {
@@ -99,7 +98,9 @@ export class AppController {
     this.appSvc.createDoc('price-clock', {
       ...data,
       bestBid: Number(data.bestBid?.[0]),
+      bestBidDepth: Number(data.bestBid?.[1]),
       bestAsk: Number(data.bestAsk?.[0]),
+      bestAskDepth: Number(data.bestAsk?.[1]),
       avgTradePrice: Number(data.avgTradePrice),
       avgTradeSize: Number(data.avgTradeSize)
     })

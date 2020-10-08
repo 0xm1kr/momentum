@@ -95,8 +95,8 @@ export class AlpacaEMA1226Controller {
                 && !this.activePairs[data.pair].lastSell
             ) {
                 const lastBuyPrice = this.activePairs[data.pair].lastBuy?.price || 0
-                const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(0.006)))
-                const curFee = bn(bestAsk[0]).times(0.001)
+                const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(0.001))) // min profit to capture
+                const curFee = bn(bestAsk[0]).times(0.001) // based on exchange fee?
                 const reqPrice = lastTotal.plus(curFee)
                 console.log('required sell price:', reqPrice.toString())
                 if (!this.activePairs[data.pair].lastSell && (!this.activePairs[data.pair].lastBuy || reqPrice.lt(bestAsk[0]))) {
@@ -137,8 +137,8 @@ export class AlpacaEMA1226Controller {
                 && !this.activePairs[data.pair].lastBuy
             ) {
                 const lastSellPrice = this.activePairs[data.pair].lastSell?.price || 0
-                const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(0.006)))
-                const curFee = bn(bestBid[0]).times(0.001)
+                const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(0.001))) // max dip before going long
+                const curFee = bn(bestBid[0]).times(0.001) // based on exchange fee?
                 const reqPrice = lastTotal.minus(curFee)
                 console.log('required buy price', reqPrice.toString())
                 if (!this.activePairs[data.pair].lastBuy && (!this.activePairs[data.pair].lastSell || bn(reqPrice).gt(bestBid[0]))) {

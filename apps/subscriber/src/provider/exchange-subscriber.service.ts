@@ -121,7 +121,7 @@ export class ExchangeSubscriberService {
       )
     }
 
-    // save in memory
+    // save in memory and return
     return this.subscriptions[exchange][pair]
   }
 
@@ -299,14 +299,16 @@ export class ExchangeSubscriberService {
         // TODO more than USD?
         const symbol = pair.split('-')[0] 
         const subscription = await this.alpacaSvc.subscribe(symbol)
+
+        // wait for subscription
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
           .pipe(throttle(() => interval(100)))
           .subscribe((sub) => {
             // setup handler
             this._handleAlpacaSubscriptionUpdate(sub)
-            // return once connected
-            if (sub.connected && !resolved) {
+            // return subscription
+            if (!resolved) {
               resolved = true
               res(subscription)
             }

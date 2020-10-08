@@ -61,8 +61,16 @@ export class AlpacaService {
     })
   }
 
-  public get marketClock() {
+  public get clock(): AlpacaClock {
     return this._clock
+  }
+
+  public get clock$(): Promise<Observable<AlpacaClock>> {
+    if (this._observableClock) {
+      return Promise.resolve(this._observableClock)
+    }
+
+    return this._initClock()
   }
 
   public get connection(): Promise<AlpacaStream> {
@@ -70,14 +78,6 @@ export class AlpacaService {
       return Promise.resolve(this._stream)
     }
     return this._connect()
-  }
-
-  public get clock(): Promise<Observable<AlpacaClock>> {
-    if (this._observableClock) {
-      return Promise.resolve(this._observableClock)
-    }
-
-    return this._initClock()
   }
 
   public get subscriptions() {
@@ -153,7 +153,6 @@ export class AlpacaService {
   * @param symbol 
   */
   public async subscribe(symbol: string): Promise<Observable<AlpacaSubscription>> {
-
     // get connection
     const conn = await this.connection
 
@@ -175,6 +174,11 @@ export class AlpacaService {
     // unsubscribe but leave observables 
     // allowing conn to auto re-subscribe to all
     conn.unsubscribe(subs)
+
+    // if markets are closed just resolve
+    if (!this.clock?.isOpen) {
+      return Promise.resolve(this._observableSubscriptions[symbol])
+    }
 
     // wait for this subscription to become active
     return new Promise((res, rej) => {
@@ -377,15 +381,13 @@ export class AlpacaService {
   protected async _handleSubscriptionMessage(
     message: Record<string, any>
   ) {
-    // console.log(message)
-
     // handle error
     if (message?.data?.error) {
       console.error(`Alpaca socket error ${message?.data?.error}`)
       return
     }
 
-    // generic logging
+    // handle subscription listeners
     if (message?.data) {
       if (message.stream == 'listening') {
         const subs = message?.data?.streams
@@ -403,7 +405,6 @@ export class AlpacaService {
 
         // connect
         if (subscriptions && !subscriptions.length) {
-          
           const subs = []
           Object.keys(this.subscriptions).forEach(s => {
             subs.push(`T.${s}`)
@@ -413,7 +414,6 @@ export class AlpacaService {
         } 
         // setup subscribers
         else {
-         
           if (subscriptions) {
             for (const s of subscriptions) {
               const symbol = s.split('.')[1]
@@ -425,6 +425,7 @@ export class AlpacaService {
               }
               this._observers[symbol].next(this._subscriptionMap[symbol])
             }
+            console.log('Alpaca active subscriptions', subscriptions)
           }
         }
       }

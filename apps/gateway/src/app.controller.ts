@@ -30,7 +30,7 @@ export class AppController {
     exchange: string
     pair: string
   }) {
-    this.momentum.emit('subscribe', createSub)
+    this.momentum.emit('subscription:subscribe', createSub)
 
     return {
       message: `Subscribing to ${createSub.exchange}:${createSub.pair}`
@@ -42,7 +42,7 @@ export class AppController {
     exchange: string
     pair: string
   }) {
-    this.momentum.emit('unsubscribe', delSub)
+    this.momentum.emit('subscription:unsubscribe', delSub)
 
     return {
       message: `Unsubscribing from ${delSub.exchange}:${delSub.pair}`
