@@ -427,6 +427,15 @@ export class AlpacaService {
     if (!this._subscriptionMap?.[symbol]) return
 
     this._subscriptionMap[symbol].quote = message
+
+    // Clear out old/outdated quotes
+    // TODO better way to handle this would
+    // ideally be to store bid/asks as a unique
+    // by exchange code sorted by price list
+    if (this._subscriptionMap[symbol].book.asks.size > 10) {
+      this._subscriptionMap[symbol].book.bids.clear()
+      this._subscriptionMap[symbol].book.asks.clear()
+    }
     
     const bid = {
       p: message.p,
@@ -442,9 +451,6 @@ export class AlpacaService {
     }
     this._subscriptionMap[symbol].book.bids.insert(bid)
     this._subscriptionMap[symbol].book.asks.insert(ask)
-
-    // TODO clear out old/outdated quotes?
-
     this._subscriptionMap[symbol].lastUpdateProperty = 'quote'
     this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
     this._observers[symbol].next(this._subscriptionMap[symbol])
