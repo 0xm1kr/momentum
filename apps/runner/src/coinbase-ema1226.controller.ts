@@ -115,7 +115,8 @@ export class CoinbaseEMA1226Controller {
                         // console.log(0)
                         const trade = {
                             ...order,
-                            delta: this._getOrderDelta(data.pair, order)
+                            delta: this._getOrderDelta(data.pair, order),
+                            exchange: 'coinbase'
                         }
                         this.activePairs[data.pair].lastSell = order
                         this.activePairs[data.pair].lastBuy = null
@@ -156,7 +157,8 @@ export class CoinbaseEMA1226Controller {
                         // console.log(o)
                         const trade = {
                             ...order,
-                            delta: this._getOrderDelta(data.pair, order)
+                            delta: this._getOrderDelta(data.pair, order),
+                            exchange: 'coinbase'
                         }
                         this.activePairs[data.pair].lastBuy = order
                         this.activePairs[data.pair].lastSell = null

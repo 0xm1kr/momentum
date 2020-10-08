@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common'
 import { Observable, Observer } from 'rxjs'
 import { AlpacaClient, AlpacaStream, PlaceOrder, Clock } from '@momentum/alpaca'
 import { RBTree } from 'bintrees'
+import { resolve as resolvePath } from 'path'
 
 export type AlpacaClock = {
   isOpen: boolean,
@@ -60,11 +61,6 @@ export class AlpacaService {
     })
   }
 
-  async beforeApplicationShutdown() {
-    console.log('ALPACA: SHUTTING DOWN!')
-    this._stream.close()
-  }
-
   public get marketClock() {
     return this._clock
   }
@@ -86,29 +82,6 @@ export class AlpacaService {
 
   public get subscriptions() {
     return this._observableSubscriptions
-  }
-
-  /**
-   * Get the Alpaca market clock
-   */
-  public async _initClock(): Promise<Observable<AlpacaClock>> {
-
-    // setup
-    const result = await this._client.getClock()
-    this._clock = this._calculateClock(result)
-
-    // create observable
-    this._observableClock = new Observable(subject => {
-      subject.next(this._clock)
-      // TODO clear on error?
-      const intvl = setInterval((async () => {
-        const result = await this._client.getClock()
-        this._clock = this._calculateClock(result)
-        subject.next(this._clock)
-      }).bind(this), this._clockCheckInterval)
-    })
-
-    return this._observableClock
   }
 
   /**
@@ -193,6 +166,8 @@ export class AlpacaService {
     await this._createSubscriptionObserver(symbol)
 
     // subscribe
+    // TODO subscribe / resubscribe all
+    const subs = Object.keys(this.subscriptions)
     conn.subscribe([`T.${symbol}`, `Q.${symbol}`])
 
     return this._observableSubscriptions[symbol]
@@ -221,6 +196,29 @@ export class AlpacaService {
   }
 
   // ------- internal methods --------
+
+  /**
+   * Get the Alpaca market clock
+   */
+  protected async _initClock(): Promise<Observable<AlpacaClock>> {
+
+    // setup
+    const result = await this._client.getClock()
+    this._clock = this._calculateClock(result)
+
+    // create observable
+    this._observableClock = new Observable(subject => {
+      subject.next(this._clock)
+      // TODO clear on error?
+      const intvl = setInterval((async () => {
+        const result = await this._client.getClock()
+        this._clock = this._calculateClock(result)
+        subject.next(this._clock)
+      }).bind(this), this._clockCheckInterval)
+    })
+
+    return this._observableClock
+  }
 
   /**
    * Calculate Alpaca clock info
@@ -363,13 +361,19 @@ export class AlpacaService {
 
     // generic logging
     if (message?.data) {
-      console.log(message)
+      // console.log(message)
     }
 
     // set up heart beat
     this._handleHeartBeatMessage.call(this)
 
     if ('stream' in message) {
+      
+      if (message.stream === 'listening') {
+        const subs = message?.data?.streams
+        console.log('Alpaca active subscriptions:', subs)
+      } 
+
       const subscriptions = message.data?.streams
       if (subscriptions?.length && Object.keys(this._subscriptionMap)?.length) {
         // set subscription connected flags

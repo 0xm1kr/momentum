@@ -30,8 +30,7 @@ export class AppController {
     const alpSubs = await this.redis.smembers('subscriptions:alpaca')
     if (alpSubs.length) {
       // subscribe
-      // TODO more than USD?
-      alpSubs.forEach(s => this.exSubSvc.subscribe(s.split('-')[0], 'alpaca'))
+      alpSubs.forEach(s => this.exSubSvc.subscribe(s, 'alpaca'))
     }
   }
 
