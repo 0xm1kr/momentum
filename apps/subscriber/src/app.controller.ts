@@ -63,7 +63,6 @@ export class AppController {
   }) {
     // remove subscription
     // TODO await?
-    console.log(delSub)
     this.exSubSvc.unsubscribe(delSub.pair, delSub.exchange)
     await this.redis.srem(`subscriptions:${delSub.exchange}`, delSub.pair)
     // TODO emit event?

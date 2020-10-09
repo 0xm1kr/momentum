@@ -6,7 +6,7 @@
 	},
 	"item": [
 		{
-			"name": "POST /kil",
+			"name": "POST /kill",
 			"request": {
 				"method": "POST",
 				"header": [],

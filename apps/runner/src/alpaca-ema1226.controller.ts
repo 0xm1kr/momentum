@@ -266,13 +266,14 @@ export class AlpacaEMA1226Controller {
 
         // backfill price data
         // TODO more than USD?
-        const symbol = data.pair.split('-')[1]
+        const symbol = data.pair.split('-')[0]
         const clockP = {
             '1m'  : '1Min',
             '5m'  : '5Min',
             '15m' : '15Min'
         }
         const candles = await this.alpSvc.getBars(symbol, clockP[data.period])
+        console.log(candles)
         this.activePairs[data.pair].pricePeriods = candles[symbol].map(c => (c.c))
     }
 

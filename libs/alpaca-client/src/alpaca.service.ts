@@ -330,8 +330,8 @@ export class AlpacaService {
       ticker: null,
       quote: null,
       book: {
-        bids: new RBTree((a, b) => (a.p - b.p || a.t - b.t)),
-        asks: new RBTree((a, b) => (a.p - b.p || a.t - b.t))
+        bids: new RBTree((a, b) => (a.t - b.t || a.p - b.p)),
+        asks: new RBTree((a, b) => (a.t - b.t || a.p - b.p))
       }
     }
 

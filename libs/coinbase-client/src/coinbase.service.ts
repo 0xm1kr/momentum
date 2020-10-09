@@ -313,7 +313,7 @@ export class CoinbaseService {
         WebSocketEvent.ON_MESSAGE_TICKER, 
         this._handleSubscriptionTickerMessage.bind(this)
       )
-
+      
       // book update
       this._client.ws.on(
         WebSocketEvent.ON_MESSAGE, 
