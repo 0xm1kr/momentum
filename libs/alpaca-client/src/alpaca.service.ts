@@ -165,7 +165,7 @@ export class AlpacaService {
     await this._createSubscriptionObserver(symbol)
 
     // subscribe
-    // TODO subscribe / resubscribe all
+    // TODO unsubscribe / resubscribe all
     const subs = [`T.${symbol}`, `Q.${symbol}`]
     Object.keys(this.subscriptions).forEach(s => {
       subs.push(`T.${s}`)

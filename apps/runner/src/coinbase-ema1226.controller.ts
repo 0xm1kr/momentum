@@ -8,13 +8,6 @@ import bn from 'big.js'
 import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
 import { CoinbaseService } from '@momentum/coinbase-client'
 
-type Trade = {
-    side: string
-    size: string
-    price: string
-    time: number
-}
-
 export type AlgorithmData = {
     pair: string
     startTime: number
@@ -23,8 +16,8 @@ export type AlgorithmData = {
     ema12: number[]
     ema26: number[]
     size: string
-    lastBuy?: Trade
-    lastSell?: Trade
+    lastBuy?: TradeEvent
+    lastSell?: TradeEvent
 }
 
 export type ActivePairs = Record<string, AlgorithmData>
@@ -40,6 +33,7 @@ export class CoinbaseEMA1226Controller {
     // TODO move all of this to a service
     private redis: Redis
     private activePairs: ActivePairs = {}
+    private orderPending = false
 
     async onApplicationBootstrap() {
         // connect to store
@@ -66,6 +60,7 @@ export class CoinbaseEMA1226Controller {
     @EventPattern('update:coinbase')
     async handleUpdate(data: ClockEvent) {
         if (!this.activePairs[data.pair]) return
+        if (this.orderPending) return
 
         if (this.activePairs[data.pair].ema26.length) {
             const bestAsk = data.bestAsk
@@ -109,20 +104,26 @@ export class CoinbaseEMA1226Controller {
                         time: new Date().getTime()
                     }
                     try {
-                        // TODO go live
-                        // TODO what if this never fills?
-                        // const o = await this.cbService.limitOrder(data.pair, order)
-                        // console.log(0)
+                        // place order (with "lock")
+                        this.orderPending = true
+                        const o = await this.cbService.placeOrder(data.pair, order, true)
+                        this.orderPending = false
+
+                        // store / set trade
                         const trade = {
                             ...order,
-                            delta: this._getOrderDelta(data.pair, order),
-                            exchange: 'coinbase'
+                            id: o.id,
+                            size: o.filled_size,
+                            price: o.price,
+                            exchange: 'coinbase',
+                            delta: '0'
                         }
-                        this.activePairs[data.pair].lastSell = order
+                        trade.delta = this._getOrderDelta(data.pair, trade),
+
+                        this.activePairs[data.pair].lastSell = trade
                         this.activePairs[data.pair].lastBuy = null
                         this.momentum.emit('trade:coinbase', trade)
                         this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, trade)
-                        
                     } catch (err) {
                         console.log(err)
                     }
@@ -151,19 +152,26 @@ export class CoinbaseEMA1226Controller {
                         time: new Date().getTime()
                     }
                     try {
-                        // TODO go live
-                        // TODO what if this never fills?
-                        // const o = await this.activePairs[data.pair].cbService.limitOrder(data.pair, order)
-                        // console.log(o)
+                        // place order (with "lock")
+                        this.orderPending = true
+                        const o = await this.cbService.placeOrder(data.pair, order, true)
+                        this.orderPending = false
+
+                        // store / set trade
                         const trade = {
                             ...order,
-                            delta: this._getOrderDelta(data.pair, order),
-                            exchange: 'coinbase'
+                            id: o.id,
+                            size: o.filled_size,
+                            price: o.price,
+                            exchange: 'coinbase',
+                            delta: '0'
                         }
-                        this.activePairs[data.pair].lastBuy = order
+                        trade.delta = this._getOrderDelta(data.pair, trade)
+                        
                         this.activePairs[data.pair].lastSell = null
-                        this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, trade)
+                        this.activePairs[data.pair].lastBuy = trade
                         this.momentum.emit('trade:coinbase', trade)
+                        this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, trade)
                     } catch (err) {
                         console.log(err.response.data)
                     }
@@ -242,14 +250,17 @@ export class CoinbaseEMA1226Controller {
             ema26: [],
         }
 
-        // previous trades
+        // init with previous trade
         if (data.lastTrade) {
             const lt = data.lastTrade.split(',')
             const order = {
+                pair: data.pair,
                 side: lt[0],
                 size: data.size,
                 price: lt[1],
-                time: Number(lt[2]) || new Date().getTime()
+                time: Number(lt[2]) || new Date().getTime(),
+                delta: '0',
+                exchange: 'coinbase'
             }
             if (lt[0] === 'buy') {
                 this.activePairs[data.pair].lastBuy = order
@@ -277,7 +288,7 @@ export class CoinbaseEMA1226Controller {
      * @param pair 
      * @param order 
      */
-    private _getOrderDelta(pair: string, order: Trade) {
+    private _getOrderDelta(pair: string, order: TradeEvent) {
         let delta = '0'
         const active = this.activePairs[pair]
         const lastBuy = this.activePairs[pair].lastBuy
