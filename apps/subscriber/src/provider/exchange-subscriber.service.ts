@@ -240,6 +240,7 @@ export class ExchangeSubscriberService {
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
           .pipe(throttle(() => interval(100)))
           .subscribe((sub) => {
+            // console.log(sub)
             // setup handler
             this._handleCoinbaseSubscriptionUpdate(sub)
             // return once connected

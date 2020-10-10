@@ -106,9 +106,11 @@ export class CoinbaseEMA1226Controller {
                     try {
                         // place order (with "lock")
                         this.orderPending = true
+                        console.log(this.cbService)
                         const o = await this.cbService.placeOrder(data.pair, order, true)
                         this.orderPending = false
 
+                        // TODO handle with "trade:" controller method instead
                         // store / set trade
                         const trade = {
                             ...order,
@@ -251,6 +253,7 @@ export class CoinbaseEMA1226Controller {
         }
 
         // init with previous trade
+        console.log(data)
         if (data.lastTrade) {
             const lt = data.lastTrade.split(',')
             const order = {

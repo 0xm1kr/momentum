@@ -145,25 +145,13 @@ export class CoinbaseService {
     // place order
     const placedOrder = await this._client.rest.order.placeOrder(o)
 
-    // if subscribed to this book
-    // add to subscription orders
-    // map and inform any listeners
-    if (this._observableSubscriptions[productId]) {
-      
-      this._subscriptionMap[productId].orders[placedOrder.id] = placedOrder
-      this._subscriptionMap[productId].lastUpdateProperty = 'orders'
-      this._subscriptionMap[productId].lastUpdate = new Date().getTime()
-      this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-
-      // if awaitOrder, wait for
-      // for order to fill or fail
-      if (awaitOrder) {
-        return this.awaitOrder(placedOrder)
-      }
-    } else {
-      return placedOrder
+    // if awaitOrder, wait for
+    // order to fill or fail
+    if (awaitOrder) {
+      return this.awaitOrder(placedOrder)
     }
-    
+
+    return placedOrder    
   }
 
   /**
@@ -407,7 +395,8 @@ export class CoinbaseService {
         asks: new RBTree(
           (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
         )
-      }
+      },
+      orders: {}
     }
        
     // setup observable
@@ -464,7 +453,6 @@ export class CoinbaseService {
         }
       }
     }
-    
   }
 
   /**
@@ -517,27 +505,50 @@ export class CoinbaseService {
     if (!this._subscriptionMap?.[productId]) return
 
     // handle book updates
-    if (message.type === WebSocketResponseType.LEVEL2_UPDATE || message.type === WebSocketResponseType.LEVEL2_SNAPSHOT) {
+    if (message.type === WebSocketResponseType.LEVEL2_UPDATE 
+      || message.type === WebSocketResponseType.LEVEL2_SNAPSHOT) {
       this._handleSubscriptionBookMessage(message)
     }
 
     // handle order updates
-    if (message.type === WebSocketResponseType.LAST_MATCH || message.type === WebSocketResponseType.FULL_DONE) {
+    if (message.type === WebSocketResponseType.FULL_OPEN
+      || message.type === WebSocketResponseType.LAST_MATCH 
+      || message.type === WebSocketResponseType.FULL_DONE) {
       this._handleSubscriptionOrderMessage(message)
     }
   }
 
+  /**
+   * Handles order updates
+   * 
+   * @param message 
+   */
   private async _handleSubscriptionOrderMessage(
     message: WebSocketResponse
   ) {
     const productId = (message as any).product_id
 
+    // order created/placed by us (TODO validate profile_id?)
+    if (message.type === WebSocketResponseType.FULL_OPEN) {
+      const m = (message as any)
+      const orderId = m.order_id
+
+      if (orderId) {
+        const o = await this.getOrder(orderId)
+        this._subscriptionMap[productId].orders[o.id] = o        
+        this._subscriptionMap[productId].lastUpdateProperty = 'orders'
+        this._subscriptionMap[productId].lastUpdate = new Date().getTime()
+        this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
+        console.log('ORDER CREATED!', this._subscriptionMap[productId])
+      }
+    }
+
     // order matches
     if (message.type === WebSocketResponseType.LAST_MATCH) {
       const m = (message as WebSocketMatchMessage)
-      const o = this._subscriptionMap[productId].orders[m.product_id]
-      console.log('match', m, o)
-      // TODO update order filled amount?
+      // const o = this._subscriptionMap[productId].orders[m.product_id]
+      console.log('ORDER MATCH!', m)
+      // TODO update order filled amount? maker vs. taker
     }
 
     // order "done" (removed from book)
@@ -555,22 +566,22 @@ export class CoinbaseService {
     // }
     if (message.type === WebSocketResponseType.FULL_DONE) {
       const m = (message as any) 
-      const o = this._subscriptionMap[productId].orders[m.product_id]
-
+      const o = this._subscriptionMap[productId].orders[m.order_id]
+      console.log(m)
       if (o) {
         // update order with filled data
         const filled = (o as FilledOrder)
         filled.done_at = m.time
-        filled.done_reason = 'filled'
+        filled.done_reason = m.reason
         filled.status = OrderStatus.DONE
-        filled.filled_size = filled.size
+        filled.filled_size = bn(o.size).minus(m.remaining_size).toString()
         filled.settled = true
 
         this._subscriptionMap[productId].orders[o.id] = filled
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
-        console.log(this._subscriptionMap[productId])
         this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
+        console.log('ORDER DONE!', this._subscriptionMap[productId])
       }
     }
     
