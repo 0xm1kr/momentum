@@ -1,8 +1,12 @@
 import { Injectable } from '@nestjs/common'
 import { Observable, Observer } from 'rxjs'
-import { AlpacaClient, AlpacaStream, PlaceOrder, Clock } from '@momentum/alpaca'
+import { AlpacaClient, AlpacaStream, PlaceOrder, Order, Clock } from '@momentum/alpaca'
 import { RBTree } from 'bintrees'
-import { resolve as resolvePath } from 'path'
+
+export {
+  PlaceOrder,
+  Order
+}
 
 export type AlpacaClock = {
   isOpen: boolean,
@@ -27,6 +31,7 @@ export type AlpacaSubscription = {
   book?: Book
   quote?: any
   ticker?: any
+  orders?: Record<string, Order>
   lastUpdate?: number // unix time
   lastUpdateProperty?: string // which property was updated
 }
@@ -164,15 +169,14 @@ export class AlpacaService {
     // setup observer
     await this._createSubscriptionObserver(symbol)
 
-    // subscribe
-    // TODO unsubscribe / resubscribe all
+    // unsubscribe but leave observables 
+    // allowing conn to auto re-subscribe to all
     const subs = [`T.${symbol}`, `Q.${symbol}`]
     Object.keys(this.subscriptions).forEach(s => {
       subs.push(`T.${s}`)
       subs.push(`Q.${s}`)
+      // TODO order updates
     })
-    // unsubscribe but leave observables 
-    // allowing conn to auto re-subscribe to all
     conn.unsubscribe(subs)
 
     // if markets are closed just resolve

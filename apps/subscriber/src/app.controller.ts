@@ -23,7 +23,10 @@ export class AppController {
     const cbSubs = await this.redis.smembers('subscriptions:coinbase')
     if (cbSubs.length) {
       // subscribe
-      cbSubs.forEach(s => this.exSubSvc.subscribe(s, 'coinbase'))
+      // TODO more efficient to handle all at once?
+      for(const s of cbSubs) {
+        await this.exSubSvc.subscribe(s, 'coinbase')
+      }
     }
 
     // init existing alpaca subscriptions

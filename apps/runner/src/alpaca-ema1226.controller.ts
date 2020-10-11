@@ -5,7 +5,7 @@ import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
 import bn from 'big.js'
 import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
-import { AlpacaService, Granularity } from '@momentum/alpaca-client'
+import { AlpacaService, Granularity, Order } from '@momentum/alpaca-client'
 
 type Trade = {
     side: string
@@ -65,6 +65,8 @@ export class AlpacaEMA1226Controller {
     @EventPattern('update:alpaca')
     async handleUpdate(data: ClockEvent) {
         if (!this.activePairs[data.pair]) return
+
+        // TODO if data.lastUpdateProperty === orders, handle logic
 
         if (this.activePairs[data.pair].ema26.length) {
             const bestAsk = data.bestAsk

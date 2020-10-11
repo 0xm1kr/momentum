@@ -20,7 +20,7 @@ import {
   FeeUtil,
   FeeEstimate,
   CandleGranularity,
-  Candle, WebSocketSubscription, WebSocketErrorMessage, TimeInForce, FilledOrder
+  Candle, WebSocketSubscription, WebSocketErrorMessage, TimeInForce, FilledOrder, CancelOrderPeriod, AutoCancelLimitOrder
 } from 'coinbase-pro-node'
 import { RBTree } from 'bintrees'
 import { Observable, Observer } from 'rxjs'
@@ -43,6 +43,8 @@ import bn from 'big.js'
 
 export {
   Observable,
+  Order,
+  TimeInForce,
   WebSocketEvent,
   WebSocketChannelName,
   WebSocketResponse,
@@ -119,6 +121,7 @@ export class CoinbaseService {
       side: OrderSide
       price: string
       timeInForce?: TimeInForce 
+      cancelAfter?: CancelOrderPeriod
       stop?: 'loss' | 'entry'
       stopPrice?: string,
     },
@@ -135,7 +138,12 @@ export class CoinbaseService {
       time_in_force: params.timeInForce || TimeInForce.GOOD_TILL_CANCELED
     }
 
-    // create stop order
+    // GTT order
+    if (params.timeInForce === TimeInForce.GOOD_TILL_TIME) {
+      (o as AutoCancelLimitOrder).cancel_after = params.cancelAfter || CancelOrderPeriod.ONE_MINUTE
+    }
+
+    // Stop order
     if (params.stop) {
       o.stop = params.stop
       if (!params.stopPrice) throw new Error(`stopPrice is required for a stop ${params.stop} order`)
@@ -241,8 +249,15 @@ export class CoinbaseService {
       name: WebSocketChannelName.USER,
       product_ids: [productId]
     }])
-    
-    return this._observableSubscriptions[productId]
+
+    // wait for this subscription to become active
+    return new Promise((res, rej) => {
+      this._observableSubscriptions[productId].subscribe(o => {
+        if (o.connected.length === 3) {
+          return res(this._observableSubscriptions[productId])
+        }
+      })
+    })
   }
 
   /**
@@ -307,7 +322,6 @@ export class CoinbaseService {
       // on open
       this._client.ws.on(WebSocketEvent.ON_OPEN, () => {
         console.log('Coinbase connection established')
-        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
 
         // init heartbeat
         this._handleHeartBeat()
@@ -322,7 +336,6 @@ export class CoinbaseService {
       // on close
       this._client.ws.on(WebSocketEvent.ON_CLOSE, () => {
         console.log('Coinbase connection closed!')
-        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
         if (this._heartbeat) {
           clearTimeout(this._heartbeat)
         }
@@ -434,23 +447,31 @@ export class CoinbaseService {
   protected async _handleSubscriptionUpdate(
     subscriptions: WebSocketSubscription
   ) {
-    // disconnect if no more subscriptions
-    if (subscriptions.channels.length === 0) {
-      this._client.ws.disconnect()
-      this._wsClient = null
-    }
+    
     if (Object.keys(this._subscriptionMap)?.length) {
-      // set subscription connected flag
-      for(const c of subscriptions.channels) {
-        for(const p of c.product_ids) {
-          if (!this._subscriptionMap[p].connected.includes(c.name)) {
-            this._subscriptionMap[p].connected.push(c.name)
+
+      // connect
+      if (subscriptions.channels?.length) {
+
+        // set subscription connected flags
+        for(const c of subscriptions.channels) {
+          for(const p of c.product_ids) {
+            if (!this._subscriptionMap[p].connected.includes(c.name)) {
+              this._subscriptionMap[p].connected.push(c.name)
+            }
+            if (!this._subscriptionObservers[p]) {
+              this._observableSubscriptions[p] = await this._createSubscriptionObserver(p)
+            }
+            this._subscriptionObservers[p].next(this._subscriptionMap[p])
           }
-          if (!this._subscriptionObservers[p]) {
-            this._observableSubscriptions[p] = await this._createSubscriptionObserver(p)
-          }
-          this._subscriptionObservers[p].next(this._subscriptionMap[p])
         }
+        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
+      }
+    } else {
+      // disconnect if no more subscriptions
+      if (subscriptions.channels.length === 0) {
+        this._client.ws.disconnect()
+        this._wsClient = null
       }
     }
   }
@@ -468,7 +489,7 @@ export class CoinbaseService {
     // TODO
     // this._subscriptionObservers[].error(error)
     // delete this._subscriptionMap[productId]
-    console.error('Coinbase subscription error', error)
+    console.error('Coinbase subscription:', error)
   }
 
   /**
@@ -538,8 +559,9 @@ export class CoinbaseService {
         this._subscriptionMap[productId].orders[o.id] = o        
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
-        this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        console.log('ORDER CREATED!', this._subscriptionMap[productId])
+        // TODO this causes doubles
+        // this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
+        console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
       }
     }
 
@@ -547,8 +569,8 @@ export class CoinbaseService {
     if (message.type === WebSocketResponseType.LAST_MATCH) {
       const m = (message as WebSocketMatchMessage)
       // const o = this._subscriptionMap[productId].orders[m.product_id]
-      console.log('ORDER MATCH!', m)
-      // TODO update order filled amount? maker vs. taker
+      console.log('COINBASE ORDER MATCH!', m)
+      // TODO handle partial fills?
     }
 
     // order "done" (removed from book)
@@ -567,7 +589,6 @@ export class CoinbaseService {
     if (message.type === WebSocketResponseType.FULL_DONE) {
       const m = (message as any) 
       const o = this._subscriptionMap[productId].orders[m.order_id]
-      console.log(m)
       if (o) {
         // update order with filled data
         const filled = (o as FilledOrder)
@@ -581,7 +602,7 @@ export class CoinbaseService {
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
         this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        console.log('ORDER DONE!', this._subscriptionMap[productId])
+        console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
       }
     }
     
