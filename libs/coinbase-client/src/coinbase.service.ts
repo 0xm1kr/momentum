@@ -114,7 +114,7 @@ export class CoinbaseService {
    * @param params
    * @param awaitOrder
    */
-  public async placeOrder(
+  public async limitOrder(
     productId: string, 
     params: {
       size: string // amount in base token
@@ -128,7 +128,6 @@ export class CoinbaseService {
     awaitOrder?: boolean
   ): Promise<Order> {
 
-    // TODO other order types?
     const o: LimitOrder = {
       type: OrderType.LIMIT,
       product_id: productId,
@@ -151,15 +150,15 @@ export class CoinbaseService {
     }
 
     // place order
-    const placedOrder = await this._client.rest.order.placeOrder(o)
+    return this._client.rest.order.placeOrder(o)
 
-    // if awaitOrder, wait for
-    // order to fill or fail
-    if (awaitOrder) {
-      return this.awaitOrder(placedOrder)
-    }
+    // // if awaitOrder, wait for
+    // // order to fill or fail
+    // if (awaitOrder) {
+    //   return this.awaitOrder(placedOrder)
+    // }
 
-    return placedOrder    
+    // return placedOrder    
   }
 
   /**
@@ -284,6 +283,8 @@ export class CoinbaseService {
 
   /**
    * Await an order
+   * NOTE: only works when subscriber/runner
+   * are in the same microservice.
    * 
    * @param order 
    */

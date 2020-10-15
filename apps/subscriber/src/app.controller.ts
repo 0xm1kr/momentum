@@ -48,18 +48,17 @@ export class AppController {
       }
   }
 
-  @EventPattern('subscription:subscribe')
+  @EventPattern('subscribe')
   async createSubscription(createSub: {
     exchange: string
     pair: string
   }) {
     // add subscription
     await this.exSubSvc.subscribe(createSub.pair, createSub.exchange)
-    await this.redis.sadd(`subscriptions:${createSub.exchange}`, createSub.pair)
     // TODO emit event?
   }
 
-  @EventPattern('subscription:unsubscribe')
+  @EventPattern('unsubscribe')
   async delSubscription(delSub: {
     exchange: string
     pair: string
@@ -67,7 +66,6 @@ export class AppController {
     // remove subscription
     // TODO await?
     this.exSubSvc.unsubscribe(delSub.pair, delSub.exchange)
-    await this.redis.srem(`subscriptions:${delSub.exchange}`, delSub.pair)
     // TODO emit event?
   }
 

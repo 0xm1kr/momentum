@@ -220,7 +220,7 @@ export class ExchangeSubscriberService {
         const subscription = await this.coinbaseSvc.subscribe(pair)
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(100)))
+          .pipe(throttle(() => interval(200)))
           .subscribe((sub) => {
             // console.log(sub)
             // setup handler
@@ -288,7 +288,7 @@ export class ExchangeSubscriberService {
         // wait for subscription
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(100)))
+          .pipe(throttle(() => interval(200)))
           .subscribe((sub) => {
             // setup handler
             this._handleAlpacaSubscriptionUpdate(sub)

@@ -63,12 +63,7 @@ export class CoinbaseEMA1226Controller {
 
         // check if pending order is updated
         const order = data.orders[this.pendingOrder?.id]
-        if (
-            data.property === 'orders'
-            && this.pendingOrder
-            && order
-            && this.pendingOrder.id === order.id
-        ) {
+        if (order) {
             this._checkPendingOrder(data.pair, order as Order)
         }
 
@@ -116,11 +111,13 @@ export class CoinbaseEMA1226Controller {
                         side: OrderSide.SELL,
                         price: bestAsk[0],
                         time: new Date().getTime(),
-                        timeInForce: TimeInForce.GOOD_TILL_TIME
+                        // TODO taker might be higher fees, but drastically simplifies partial fill logic
+                        timeInForce: TimeInForce.FILL_OR_KILL 
                     }
                     try {
-                        // place order as "lock"
-                        this.pendingOrder = await this.cbService.placeOrder(data.pair, order)
+                        // place order
+                        if (this.pendingOrder) return
+                        this.pendingOrder = await this.cbService.limitOrder(data.pair, order)
                         console.log('Sell order placed!', this.pendingOrder)
                     } catch (err) {
                         console.error(err)
@@ -148,11 +145,13 @@ export class CoinbaseEMA1226Controller {
                         side: OrderSide.BUY,
                         price: bestBid[0],
                         time: new Date().getTime(),
-                        timeInForce: TimeInForce.GOOD_TILL_TIME
+                        // TODO taker might be higher fees, but drastically simplifies partial fill logic
+                        timeInForce: TimeInForce.FILL_OR_KILL 
                     }
                     try {
-                        // place order (with "lock")
-                        this.pendingOrder = await this.cbService.placeOrder(data.pair, order)
+                        // place order
+                        if (this.pendingOrder) return
+                        this.pendingOrder = await this.cbService.limitOrder(data.pair, order)
                         console.log('Buy order placed!', this.pendingOrder)
                     } catch (err) {
                         console.log(err)
@@ -256,7 +255,7 @@ export class CoinbaseEMA1226Controller {
         }
 
         // log info
-        console.log(`STARTING: EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
+        console.log(`STARTING: COINBASE EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
 
         // backfill price data
         const period = ClockInterval[data.period]
@@ -271,7 +270,7 @@ export class CoinbaseEMA1226Controller {
      * @param order 
      */
     private async _checkPendingOrder(pair: string, order: Order) {
-        console.log('HANDLE PENDING', order)
+
         if (order.status === 'done') {
 
             // store / set trade
@@ -289,18 +288,21 @@ export class CoinbaseEMA1226Controller {
                 }
                 trade.delta = this._getOrderDelta(pair, trade),
 
-                    this.activePairs[pair].lastSell = trade.side === 'sell' ? trade : null
+                this.activePairs[pair].lastSell = trade.side === 'sell' ? trade : null
                 this.activePairs[pair].lastBuy = trade.side === 'buy' ? trade : null
 
                 // TODO array?
+                await this.redis.hmset(`trade:coinbase:ema1226:${pair}`, trade)
                 this.momentum.emit('trade:coinbase', trade)
-                this.redis.hmset(`trade:coinbase:ema1226:${pair}`, trade)
             }
 
             // clear pending order
             if (this.pendingOrder?.id === order.id) {
                 this.pendingOrder = null
             }
+        } else {
+            // TODO handle partial fill?
+            console.log('PARTIAL FILL!', order.id, order.filled_size)
         }
     }
 

@@ -4,6 +4,8 @@ export { AlpacaStream } from './lib/stream'
 export {
   Account,
   Order,
+  OrderSide,
+  OrderStatus,
   Position,
   Asset,
   Watchlist,

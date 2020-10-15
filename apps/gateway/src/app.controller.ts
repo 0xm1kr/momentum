@@ -30,8 +30,10 @@ export class AppController {
     exchange: string
     pair: string
   }) {
-    this.momentum.emit('subscription:subscribe', createSub)
-
+    await this.momentum.emit('subscribe', createSub).toPromise()
+    // TODO only add if it succeeds?
+    await this.redis.sadd(`subscriptions:${createSub.exchange}`, createSub.pair)
+    
     return {
       message: `Subscribing to ${createSub.exchange}:${createSub.pair}`
     }
@@ -42,7 +44,9 @@ export class AppController {
     exchange: string
     pair: string
   }) {
-    this.momentum.emit('subscription:unsubscribe', delSub)
+    await this.momentum.emit('unsubscribe', delSub).toPromise()
+    // TODO only remove if it succeeds?
+    await this.redis.srem(`subscriptions:${delSub.exchange}`, delSub.pair)
 
     return {
       message: `Unsubscribing from ${delSub.exchange}:${delSub.pair}`
