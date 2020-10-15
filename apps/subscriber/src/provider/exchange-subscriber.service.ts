@@ -311,6 +311,7 @@ export class ExchangeSubscriberService {
    * @param update 
    */
   private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
+    // TODO bad bid/ask spread?
     const bestBid = update.book?.bids?.max()
     const bestAsk = update.book?.asks?.min()
 
@@ -327,7 +328,7 @@ export class ExchangeSubscriberService {
       size: update.ticker?.s,
       timestamp: (update.ticker?.t / 1000), // micro second
       flags: update.ticker?.c,
-      exchange: this.exchanges[update.ticker?.x]?.code,
+      exchange: this.exchanges[update.ticker?.x]?.name,
     } : null
 
     // record update
@@ -336,8 +337,8 @@ export class ExchangeSubscriberService {
       property: update.lastUpdateProperty,
       timestamp: update.lastUpdate,
       lastTrade,
-      bestBid: bestBid ? [bestBid.p, bestBid.s, bestBid.t, this.exchanges[bestBid.x]?.code] : null,
-      bestAsk: bestAsk ? [bestAsk.p, bestAsk.s, bestAsk.t, this.exchanges[bestAsk.x]?.code] : null,
+      bestBid: bestBid ? [bestBid.p, bestBid.s, bestBid.t, this.exchanges[bestBid.x]?.name] : null,
+      bestAsk: bestAsk ? [bestAsk.p, bestAsk.s, bestAsk.t, this.exchanges[bestAsk.x]?.name] : null,
       orders: update.orders
     })
   }

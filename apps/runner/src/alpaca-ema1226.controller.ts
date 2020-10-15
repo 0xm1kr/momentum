@@ -5,7 +5,7 @@ import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
 import bn from 'big.js'
 import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, SubscriptionUpdateEvent, TradeEvent } from '@momentum/events'
-import { AlpacaService, Granularity, Order, OrderSide } from '@momentum/alpaca-client'
+import { AlpacaService, Order, OrderSide } from '@momentum/alpaca-client'
 
 export type AlgorithmData = {
     pair: string
@@ -30,6 +30,7 @@ export class AlpacaEMA1226Controller {
     ) { }
 
     // TODO move all of this to a service
+    private MARGIN = 0.001
     private redis: Redis
     private activePairs: ActivePairs = {}
     private pendingOrder!: Order
@@ -99,7 +100,7 @@ export class AlpacaEMA1226Controller {
                 && !this.activePairs[data.pair].lastSell
             ) {
                 const lastBuyPrice = this.activePairs[data.pair].lastBuy?.price || 0
-                const reqPrice = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(0.001))) // min profit to capture
+                const reqPrice = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN))) // min profit to capture
                 console.log('required sell price:', reqPrice.toString())
                 if (!this.activePairs[data.pair].lastSell && (!this.activePairs[data.pair].lastBuy || reqPrice.lt(bestAsk[0]))) {
                     const symbol = data.pair.split('-')[0]
@@ -130,7 +131,7 @@ export class AlpacaEMA1226Controller {
                 && !this.activePairs[data.pair].lastBuy
             ) {
                 const lastSellPrice = this.activePairs[data.pair].lastSell?.price || 0
-                const reqPrice = bn(lastSellPrice).minus((bn(lastSellPrice).times(0.001))) // max dip before going long
+                const reqPrice = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN))) // max dip before going long
 
                 console.log('required buy price', reqPrice.toString())
                 if (!this.activePairs[data.pair].lastBuy && (!this.activePairs[data.pair].lastSell || bn(reqPrice).gt(bestBid[0]))) {
@@ -139,7 +140,7 @@ export class AlpacaEMA1226Controller {
                         symbol,
                         size: Number(this.activePairs[data.pair].size),
                         side: 'buy' as OrderSide,
-                        price: Number(bestAsk[0]),
+                        price: Number(bestBid[0]),
                         time: new Date().getTime()
                     }
                     try {
@@ -260,6 +261,7 @@ export class AlpacaEMA1226Controller {
             '15m' : '15Min'
         }
         const candles = await this.alpSvc.getBars(symbol, clockP[data.period])
+        // console.log(candles)
         this.activePairs[data.pair].pricePeriods = candles[symbol].map(c => (c.c))
     }
 
@@ -270,11 +272,11 @@ export class AlpacaEMA1226Controller {
      * @param order 
      */
     private async _checkPendingOrder(pair: string, order: Order) {
-
+        
         if (order.status === 'filled') {
             const trade = {
                 id: order.id,
-                pair: order.symbol,
+                pair: `${order.symbol}-USD`, // TODO more than USD?
                 exchange: 'alpaca',
                 size: String(order.filled_qty),
                 price: String(order.limit_price),
@@ -291,6 +293,8 @@ export class AlpacaEMA1226Controller {
             await this.redis.hmset(`trade:alpaca:ema1226:${pair}`, trade)
             this.momentum.emit('trade:alpaca', trade)
         }
+
+        // TODO partial fills?
 
         if (['filled','canceled','expired','stopped','rejected','suspended'].includes(order.status)) {
             // clear pending order

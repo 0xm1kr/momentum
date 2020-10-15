@@ -125,7 +125,7 @@ export class AlpacaService {
    * @param orderId
    */
   public getOrder(orderId: string) {
-    return this._client.getOrder({ client_order_id: orderId })
+    return this._client.getOrder({ order_id: orderId })
   }
 
   /**
@@ -148,7 +148,7 @@ export class AlpacaService {
       type: 'limit',
       time_in_force: 'fok' // ?
       // extended_hours?: boolean;
-      // client_order_id?: string;
+      // id?: string;
       // trail_price?: number;
       // trail_percent?: number;
       // order_class?: 'simple' | 'bracket' | 'oco' | 'oto';
@@ -164,6 +164,28 @@ export class AlpacaService {
       }
     } else {
       order.limit_price = params.price
+    }
+
+    return this._client.placeOrder(order)
+  }
+
+   /**
+   * Place a market order
+   * 
+   * @param symbol 
+   * @param params 
+   */
+  public marketOrder(symbol: string, params: {
+    size: number
+    side: OrderSide
+  }) {
+
+    const order: PlaceOrder = {
+      symbol,
+      qty: params.size,
+      side: params.side,
+      type: 'market',
+      time_in_force: 'fok'
     }
 
     return this._client.placeOrder(order)
@@ -228,8 +250,7 @@ export class AlpacaService {
       delete this._observableSubscriptions[symbol]
       delete this._subscriptionObservers[symbol]
 
-      // unsubscribe to
-      // trigger auto-rescribe
+      // unsubscribe
       const subs = []
       Object.keys(this.subscriptions).forEach(s => {
         subs.push(`T.${s}`)
@@ -237,7 +258,7 @@ export class AlpacaService {
       })
       ;(await (this.connection)).unsubscribe(subs)
 
-      // TODO await actual disconnect message?
+      // TODO await actual disconnect?
       
     } catch (err) {
       console.warn(err)
@@ -350,10 +371,11 @@ export class AlpacaService {
       // init account stream
       this._accountStream = new AlpacaStream({
         credentials: {
-          key: process.env.ALPACA_KEY,
-          secret: process.env.ALPACA_SECRET
+          key: process.env.PAPER_ALPACA_KEY,
+          secret: process.env.PAPER_ALPACA_SECRET
         },
         stream: 'account',
+        paper: true
       })
 
       // wait for connection
@@ -391,26 +413,24 @@ export class AlpacaService {
    * @param message 
    */
   protected async _handleOrderUpdates(message: Record<string, any>) {
-    const symbol = message.data?.order?.client_order_id
+    const symbol = message.order?.symbol
 
     // not listening to this book
     if (!symbol || !this._subscriptionMap[symbol]) return
 
     // new order Created
-    if (message.data?.event === 'new') {
-      const o = message.data?.order
-      const newOrder = await this.getOrder(message.data?.order?.client_order_id)
-      if (newOrder) {
-        this._subscriptionMap[symbol].orders[o.client_order_id] = newOrder       
+    if (message.event === 'new') {
+      if (message.order) {
+        this._subscriptionMap[symbol].orders[message.order.id] = message.order     
         this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
         this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
         // TODO this could cause dupes?
         // this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
-        console.log('ALPACA ORDER CREATED!', this._subscriptionMap[symbol])
+        console.log('ALPACA ORDER CREATED!', message.order)
       }
     }
 
-    // updatedorder
+    // updated order
     if ([
         'fill', 
         'partial_fill', 
@@ -419,18 +439,17 @@ export class AlpacaService {
         'replaced', 
         'rejected', 
         'suspended'
-      ].includes(message.data?.event)) {
+      ].includes(message.event)) {
 
       // retrieve local instance of order
-      const o = this._subscriptionMap[symbol].orders[message.client_order_id]
-      const updatedOrder = await this.getOrder(message.data?.order?.client_order_id)
-      if (updatedOrder) {
+      const o = this._subscriptionMap[symbol].orders[message.order?.id]
+      if (o) {
         // update local order with updated order
-        this._subscriptionMap[symbol].orders[o.client_order_id] = updatedOrder
+        this._subscriptionMap[symbol].orders[o.id] = message.order
         this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
         this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
         this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
-        console.log('ALPACA ORDER UPDATED!', this._subscriptionMap[symbol])
+        console.log('ALPACA ORDER UPDATED!', message.order)
       }
     }
   }
@@ -455,9 +474,10 @@ export class AlpacaService {
       ticker: null,
       quote: null,
       book: {
-        bids: new RBTree((a, b) => (a.t - b.t || a.p - b.p)),
-        asks: new RBTree((a, b) => (a.t - b.t || a.p - b.p))
-      }
+        bids: new RBTree((a, b) => (a.p > b.p) ? 1 : (a.p === b.p) ? 0 : -1),
+        asks: new RBTree((a, b) => (a.p > b.p) ? 1 : (a.p === b.p) ? 0 : -1),
+      },
+      orders: {}
     }
 
     // setup observable
@@ -592,15 +612,6 @@ export class AlpacaService {
     if (!this._subscriptionMap?.[symbol]) return
 
     this._subscriptionMap[symbol].quote = message
-
-    // Clear out old/outdated quotes
-    // TODO better way to handle this would
-    // ideally be to store bid/asks as a unique
-    // by exchange code sorted by price list
-    if (this._subscriptionMap[symbol].book.asks.size > 10) {
-      this._subscriptionMap[symbol].book.bids.clear()
-      this._subscriptionMap[symbol].book.asks.clear()
-    }
     
     const bid = {
       p: message.p,
@@ -616,6 +627,26 @@ export class AlpacaService {
     }
     this._subscriptionMap[symbol].book.bids.insert(bid)
     this._subscriptionMap[symbol].book.asks.insert(ask)
+
+    // Clear out old/outdated quotes
+    // TODO better way to handle this?   
+    if (this._subscriptionMap[symbol].book.asks.size > 10) {
+      const now = new Date().getTime()
+      this._subscriptionMap[symbol].book.asks.each(a => {
+        if (now - (a.t/1000000) > 1000) {
+          this._subscriptionMap[symbol].book.asks.remove(a)
+        }
+      })
+    }
+    if (this._subscriptionMap[symbol].book.bids.size > 10) {
+      const now = new Date().getTime()
+      this._subscriptionMap[symbol].book.bids.each(b => {
+        if (now - (b.t/1000000) > 1000) {
+          this._subscriptionMap[symbol].book.bids.remove(b)
+        }
+      })
+    }
+
     this._subscriptionMap[symbol].lastUpdateProperty = 'quote'
     this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
     this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
