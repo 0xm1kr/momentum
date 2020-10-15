@@ -3,17 +3,10 @@ import { ClientProxy, EventPattern } from '@nestjs/microservices'
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
-import { OrderSide } from 'coinbase-pro-node'
+import { Order, OrderSide, TimeInForce } from 'coinbase-pro-node'
 import bn from 'big.js'
-import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
+import { AlgorithmEvent, SubscriptionUpdateEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
 import { CoinbaseService } from '@momentum/coinbase-client'
-
-type Trade = {
-    side: string
-    size: string
-    price: string
-    time: number
-}
 
 export type AlgorithmData = {
     pair: string
@@ -23,8 +16,8 @@ export type AlgorithmData = {
     ema12: number[]
     ema26: number[]
     size: string
-    lastBuy?: Trade
-    lastSell?: Trade
+    lastBuy?: TradeEvent
+    lastSell?: TradeEvent
 }
 
 export type ActivePairs = Record<string, AlgorithmData>
@@ -37,9 +30,10 @@ export class CoinbaseEMA1226Controller {
         private readonly cbService: CoinbaseService
     ) { }
 
-    // TODO move all of this to a service
+    private MARGIN = 0.006
     private redis: Redis
     private activePairs: ActivePairs = {}
+    private pendingOrder!: Order
 
     async onApplicationBootstrap() {
         // connect to store
@@ -55,8 +49,8 @@ export class CoinbaseEMA1226Controller {
                 console.log('lastTrade', lastTrade)
                 this._start({
                     ...params as AlgorithmEvent,
-                    lastTrade: Object.keys(lastTrade).length 
-                        ? `${lastTrade.side},${lastTrade.price},${lastTrade.time}` 
+                    lastTrade: Object.keys(lastTrade).length
+                        ? `${lastTrade.side},${lastTrade.price},${lastTrade.time}`
                         : (params as AlgorithmEvent).lastTrade
                 })
             }
@@ -64,8 +58,18 @@ export class CoinbaseEMA1226Controller {
     }
 
     @EventPattern('update:coinbase')
-    async handleUpdate(data: ClockEvent) {
+    async handleUpdate(data: SubscriptionUpdateEvent) {
         if (!this.activePairs[data.pair]) return
+
+        // check if pending order is updated
+        const order = data.orders[this.pendingOrder?.id]
+        if (order) {
+            this._checkPendingOrder(data.pair, order as Order)
+        }
+
+        // pause trading while pending
+        // TODO timeout?
+        if (this.pendingOrder) return
 
         if (this.activePairs[data.pair].ema26.length) {
             const bestAsk = data.bestAsk
@@ -78,7 +82,7 @@ export class CoinbaseEMA1226Controller {
                 .minus(bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 2]))
 
             console.log('-------------------------')
-            console.log('-----',data.pair,'-----')
+            console.log('-----', data.pair, '-----')
             console.log(`bestAsk ${data.bestAsk}`)
             console.log(`bestBid ${data.bestBid}`)
             console.log(`ema12 ${ema12}, ${ema12Slope}`)
@@ -96,7 +100,7 @@ export class CoinbaseEMA1226Controller {
                 && !this.activePairs[data.pair].lastSell
             ) {
                 const lastBuyPrice = this.activePairs[data.pair].lastBuy?.price || 0
-                const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(0.006)))
+                const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
                 const curFee = bn(bestAsk[0]).times(0.001)
                 const reqPrice = lastTotal.plus(curFee)
                 console.log('required sell price:', reqPrice.toString())
@@ -106,25 +110,17 @@ export class CoinbaseEMA1226Controller {
                         size: this.activePairs[data.pair].size,
                         side: OrderSide.SELL,
                         price: bestAsk[0],
-                        time: new Date().getTime()
+                        time: new Date().getTime(),
+                        // TODO taker might be higher fees, but drastically simplifies partial fill logic
+                        timeInForce: TimeInForce.FILL_OR_KILL 
                     }
                     try {
-                        // TODO go live
-                        // TODO what if this never fills?
-                        // const o = await this.cbService.limitOrder(data.pair, order)
-                        // console.log(0)
-                        const trade = {
-                            ...order,
-                            delta: this._getOrderDelta(data.pair, order),
-                            exchange: 'coinbase'
-                        }
-                        this.activePairs[data.pair].lastSell = order
-                        this.activePairs[data.pair].lastBuy = null
-                        this.momentum.emit('trade:coinbase', trade)
-                        this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, trade)
-                        
+                        // place order
+                        if (this.pendingOrder) return
+                        this.pendingOrder = await this.cbService.limitOrder(data.pair, order)
+                        console.log('Sell order placed!', this.pendingOrder)
                     } catch (err) {
-                        console.log(err)
+                        console.error(err)
                     }
                 }
             }
@@ -138,7 +134,7 @@ export class CoinbaseEMA1226Controller {
                 && !this.activePairs[data.pair].lastBuy
             ) {
                 const lastSellPrice = this.activePairs[data.pair].lastSell?.price || 0
-                const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(0.006)))
+                const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
                 const curFee = bn(bestBid[0]).times(0.001)
                 const reqPrice = lastTotal.minus(curFee)
                 console.log('required buy price', reqPrice.toString())
@@ -148,24 +144,17 @@ export class CoinbaseEMA1226Controller {
                         size: this.activePairs[data.pair].size,
                         side: OrderSide.BUY,
                         price: bestBid[0],
-                        time: new Date().getTime()
+                        time: new Date().getTime(),
+                        // TODO taker might be higher fees, but drastically simplifies partial fill logic
+                        timeInForce: TimeInForce.FILL_OR_KILL 
                     }
                     try {
-                        // TODO go live
-                        // TODO what if this never fills?
-                        // const o = await this.activePairs[data.pair].cbService.limitOrder(data.pair, order)
-                        // console.log(o)
-                        const trade = {
-                            ...order,
-                            delta: this._getOrderDelta(data.pair, order),
-                            exchange: 'coinbase'
-                        }
-                        this.activePairs[data.pair].lastBuy = order
-                        this.activePairs[data.pair].lastSell = null
-                        this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, trade)
-                        this.momentum.emit('trade:coinbase', trade)
+                        // place order
+                        if (this.pendingOrder) return
+                        this.pendingOrder = await this.cbService.limitOrder(data.pair, order)
+                        console.log('Buy order placed!', this.pendingOrder)
                     } catch (err) {
-                        console.log(err.response.data)
+                        console.log(err)
                     }
                 }
             }
@@ -242,14 +231,17 @@ export class CoinbaseEMA1226Controller {
             ema26: [],
         }
 
-        // previous trades
+        // init with previous trade
         if (data.lastTrade) {
             const lt = data.lastTrade.split(',')
             const order = {
+                pair: data.pair,
                 side: lt[0],
                 size: data.size,
                 price: lt[1],
-                time: Number(lt[2]) || new Date().getTime()
+                time: Number(lt[2]) || new Date().getTime(),
+                delta: '0',
+                exchange: 'coinbase'
             }
             if (lt[0] === 'buy') {
                 this.activePairs[data.pair].lastBuy = order
@@ -263,7 +255,7 @@ export class CoinbaseEMA1226Controller {
         }
 
         // log info
-        console.log(`STARTING: EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
+        console.log(`STARTING: COINBASE EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
 
         // backfill price data
         const period = ClockInterval[data.period]
@@ -272,12 +264,55 @@ export class CoinbaseEMA1226Controller {
     }
 
     /**
+     * Handle change to a placed order
+     * 
+     * @param pair
+     * @param order 
+     */
+    private async _checkPendingOrder(pair: string, order: Order) {
+
+        if (order.status === 'done') {
+
+            // store / set trade
+            if (order.done_reason === 'filled') {
+
+                const trade = {
+                    id: order.id,
+                    pair: order.product_id,
+                    exchange: 'coinbase',
+                    size: order.filled_size,
+                    price: order.price,
+                    side: order.side,
+                    delta: '0',
+                    time: new Date(order.created_at).getTime()
+                }
+                trade.delta = this._getOrderDelta(pair, trade),
+
+                this.activePairs[pair].lastSell = trade.side === 'sell' ? trade : null
+                this.activePairs[pair].lastBuy = trade.side === 'buy' ? trade : null
+
+                // TODO array?
+                await this.redis.hmset(`trade:coinbase:ema1226:${pair}`, trade)
+                this.momentum.emit('trade:coinbase', trade)
+            }
+
+            // clear pending order
+            if (this.pendingOrder?.id === order.id) {
+                this.pendingOrder = null
+            }
+        } else {
+            // TODO handle partial fill?
+            console.log('PARTIAL FILL!', order.id, order.filled_size)
+        }
+    }
+
+    /**
      * Calc delta from last trade
      * 
      * @param pair 
      * @param order 
      */
-    private _getOrderDelta(pair: string, order: Trade) {
+    private _getOrderDelta(pair: string, order: TradeEvent) {
         let delta = '0'
         const active = this.activePairs[pair]
         const lastBuy = this.activePairs[pair].lastBuy
@@ -285,7 +320,7 @@ export class CoinbaseEMA1226Controller {
         if (order.side === 'sell' && lastBuy) {
             const diff = bn(order.price).minus(lastBuy.price)
             delta = diff.times(active.size).toString()
-        } 
+        }
         if (order.side === 'buy' && lastSell) {
             const diff = bn(lastSell.price).minus(order.price)
             delta = diff.times(active.size).toString()
@@ -313,7 +348,7 @@ export class CoinbaseEMA1226Controller {
         // calculate moving averages
         if (this.activePairs[data.pair].pricePeriods.length >= 12) {
             this.activePairs[data.pair].ema12 = ema(this.activePairs[data.pair].pricePeriods, 12)
-            
+
             // emit for analysis
             const length = this.activePairs[data.pair].ema12.length
             this.momentum.emit('ema:coinbase', new EMAEvent(
@@ -323,7 +358,7 @@ export class CoinbaseEMA1226Controller {
                 this.activePairs[data.pair].ema12[length - 1],
                 new Date().getTime()
             ))
-            
+
             // shift one off
             this.activePairs[data.pair].pricePeriods.shift()
         }

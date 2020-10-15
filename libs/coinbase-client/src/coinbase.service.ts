@@ -5,21 +5,22 @@ import {
   WebSocketClient,
   WebSocketEvent,
   WebSocketChannelName,
-  OrderSide,
   WebSocketResponse,
   WebSocketTickerMessage,
   WebSocketChannel,
   WebSocketResponseType,
   OrderBookLevel2,
+  WebSocketMatchMessage,
   OrderBookLevel,
   LimitOrder,
-  MarketOrder,
+  OrderSide,
+  OrderStatus,
   Order,
   OrderType,
   FeeUtil,
   FeeEstimate,
   CandleGranularity,
-  Candle, WebSocketSubscription, WebSocketErrorMessage
+  Candle, WebSocketSubscription, WebSocketErrorMessage, TimeInForce, FilledOrder, CancelOrderPeriod, AutoCancelLimitOrder
 } from 'coinbase-pro-node'
 import { RBTree } from 'bintrees'
 import { Observable, Observer } from 'rxjs'
@@ -42,6 +43,8 @@ import bn from 'big.js'
 
 export {
   Observable,
+  Order,
+  TimeInForce,
   WebSocketEvent,
   WebSocketChannelName,
   WebSocketResponse,
@@ -49,16 +52,21 @@ export {
   WebSocketResponseType
 }
 
+// bid/ask orderbook RedBlack trees
 export type Book = {
   bids: Record<string, RBTree<string[]>>
   asks: Record<string, RBTree<string[]>>
 }
+
+// order map indexed by orderId
+export type Orders = Record<string, Order>
 
 export type CoinbaseSubscription = {
   productId: string
   connected: string[]
   unsubscribe?: () => void
   book: Book
+  orders?: Orders
   ticker?: WebSocketTickerMessage
   lastUpdate?: number // unix time
   lastUpdateProperty?: string // which property was updated
@@ -77,7 +85,7 @@ export class CoinbaseService {
   protected _channels: WebSocketChannel[] = []
   protected _observableSubscriptions: CoinbaseSubscriptions = {}
   protected _subscriptionMap: Record<string, CoinbaseSubscription> = {}
-  protected _observers: Record<string, Observer<CoinbaseSubscription>> = {}
+  protected _subscriptionObservers: Record<string, Observer<CoinbaseSubscription>> = {}
 
   constructor() {
     this._client = new CoinbasePro({
@@ -100,60 +108,57 @@ export class CoinbaseService {
   }
 
   /**
-   * place a limit order
-   * TODO make observable via socket
+   * place an order
    * 
    * @param productId 
-   * @param params {
-   *  amount: amount in quote (e.g. USD)
-   *  side: buy or sell
-   * }
+   * @param params
+   * @param awaitOrder
    */
-  public async limitOrder(productId: string, params: {
-    size: string
-    side: OrderSide
-    price: string
-    stop?: 'loss' | 'entry'
-    stopPrice?: string
-  }): Promise<Order> {
+  public async limitOrder(
+    productId: string, 
+    params: {
+      size: string // amount in base token
+      side: OrderSide
+      price: string
+      timeInForce?: TimeInForce 
+      cancelAfter?: CancelOrderPeriod
+      stop?: 'loss' | 'entry'
+      stopPrice?: string,
+    },
+    awaitOrder?: boolean
+  ): Promise<Order> {
+
     const o: LimitOrder = {
       type: OrderType.LIMIT,
       product_id: productId,
       side: params.side,
       size: params.size,
-      price: params.price
+      price: params.price,
+      time_in_force: params.timeInForce || TimeInForce.GOOD_TILL_CANCELED
     }
 
-    // stop order
+    // GTT order
+    if (params.timeInForce === TimeInForce.GOOD_TILL_TIME) {
+      (o as AutoCancelLimitOrder).cancel_after = params.cancelAfter || CancelOrderPeriod.ONE_MINUTE
+    }
+
+    // Stop order
     if (params.stop) {
       o.stop = params.stop
       if (!params.stopPrice) throw new Error(`stopPrice is required for a stop ${params.stop} order`)
       o.stop_price = params.stopPrice
     }
 
+    // place order
     return this._client.rest.order.placeOrder(o)
-  }
 
-  /**
-   * place a market order
-   * 
-   * @param productId 
-   * @param params {
-   *  amount: amount in quote (e.g. USD)
-   *  side: buy or sell
-   * }
-   */
-  public async marketOrder(productId: string, params: {
-    amount: string
-    side: OrderSide
-  }): Promise<Order> {
-    const o: MarketOrder = {
-      type: OrderType.MARKET,
-      product_id: productId,
-      side: params.side,
-      funds: params.amount
-    }
-    return this._client.rest.order.placeOrder(o)
+    // // if awaitOrder, wait for
+    // // order to fill or fail
+    // if (awaitOrder) {
+    //   return this.awaitOrder(placedOrder)
+    // }
+
+    // return placedOrder    
   }
 
   /**
@@ -193,6 +198,15 @@ export class CoinbaseService {
   }
 
   /**
+   * Get an order
+   * 
+   * @param orderId 
+   */
+  public async getOrder(orderId: string): Promise<Order> {
+    return this._client.rest.order.getOrder(orderId)
+  }
+
+  /**
    * getBook
    * 
    * @param productId 
@@ -222,16 +236,27 @@ export class CoinbaseService {
     this._observableSubscriptions[productId] = await this._createSubscriptionObserver(productId)
 
     // subscribe
-    conn.subscribe({ 
+    conn.subscribe([{ 
       name: WebSocketChannelName.TICKER,
       product_ids: [productId]
-    })
-    conn.subscribe({ 
+    },
+    { 
       name: WebSocketChannelName.LEVEL2,
       product_ids: [productId]
+    },
+    { 
+      name: WebSocketChannelName.USER,
+      product_ids: [productId]
+    }])
+
+    // wait for this subscription to become active
+    return new Promise((res, rej) => {
+      this._observableSubscriptions[productId].subscribe(o => {
+        if (o.connected.length === 3) {
+          return res(this._observableSubscriptions[productId])
+        }
+      })
     })
-    
-    return this._observableSubscriptions[productId]
   }
 
   /**
@@ -248,7 +273,7 @@ export class CoinbaseService {
       // remove data
       delete this._subscriptionMap[productId]
       delete this._observableSubscriptions[productId]
-      delete this._observers[productId]
+      delete this._subscriptionObservers[productId]
     } catch(err) {
       console.warn(err)
     }
@@ -256,6 +281,36 @@ export class CoinbaseService {
     return true
   }
 
+  /**
+   * Await an order
+   * NOTE: only works when subscriber/runner
+   * are in the same microservice.
+   * 
+   * @param order 
+   */
+  public async awaitOrder(order: Order): Promise<Order> {
+
+    if (!this._observableSubscriptions[order.product_id]) {
+      return Promise.reject(`Not subscribed to ${order.product_id}`)
+    }
+    
+    return new Promise((res, rej) => {
+      this._observableSubscriptions[order.product_id].subscribe(sub => {
+        if (sub.lastUpdateProperty === 'orders') {
+          const o = this._subscriptionMap[order.product_id].orders[order.id]
+
+          if (!o) {
+            return rej(`Unable to listen to order ${order.id}`)
+          }
+
+          if (o.status === 'done') {
+            // TODO reject if "done reason" isn't filled?
+            return res(o)
+          }
+        }
+      })
+    })
+  }
 
   // ----- internal methods --------
 
@@ -268,7 +323,6 @@ export class CoinbaseService {
       // on open
       this._client.ws.on(WebSocketEvent.ON_OPEN, () => {
         console.log('Coinbase connection established')
-        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
 
         // init heartbeat
         this._handleHeartBeat()
@@ -283,7 +337,6 @@ export class CoinbaseService {
       // on close
       this._client.ws.on(WebSocketEvent.ON_CLOSE, () => {
         console.log('Coinbase connection closed!')
-        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
         if (this._heartbeat) {
           clearTimeout(this._heartbeat)
         }
@@ -317,7 +370,7 @@ export class CoinbaseService {
       // book update
       this._client.ws.on(
         WebSocketEvent.ON_MESSAGE, 
-        this._handleSubscriptionBookMessage.bind(this)
+        this._handleSubscriptionMessage.bind(this)
       )
 
       // connect
@@ -356,23 +409,28 @@ export class CoinbaseService {
         asks: new RBTree(
           (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
         )
-      }
+      },
+      orders: {}
     }
        
     // setup observable
     const subscription = new Observable<CoinbaseSubscription>(subject => {
-      this._observers[productId] = subject
+      this._subscriptionObservers[productId] = subject
 
       // setup unsubscribe function
       this._subscriptionMap[productId].unsubscribe = function unsubscribe() {
-        conn.unsubscribe({ 
+        conn.unsubscribe([{ 
           name: WebSocketChannelName.TICKER,
           product_ids: [productId]
-        })
-        conn.unsubscribe({ 
+        },
+        { 
           name: WebSocketChannelName.LEVEL2,
           product_ids: [productId]
-        })
+        },
+        {
+          name: WebSocketChannelName.USER,
+          product_ids: [productId]
+        }])
         subject.complete()
       }
     })
@@ -390,26 +448,33 @@ export class CoinbaseService {
   protected async _handleSubscriptionUpdate(
     subscriptions: WebSocketSubscription
   ) {
-    // disconnect if no more subscriptions
-    if (subscriptions.channels.length === 0) {
-      this._client.ws.disconnect()
-      this._wsClient = null
-    }
+    
     if (Object.keys(this._subscriptionMap)?.length) {
-      // set subscription connected flag
-      for(const c of subscriptions.channels) {
-        for(const p of c.product_ids) {
-          if (!this._subscriptionMap[p].connected.includes(c.name)) {
-            this._subscriptionMap[p].connected.push(c.name)
+
+      // connect
+      if (subscriptions.channels?.length) {
+
+        // set subscription connected flags
+        for(const c of subscriptions.channels) {
+          for(const p of c.product_ids) {
+            if (!this._subscriptionMap[p].connected.includes(c.name)) {
+              this._subscriptionMap[p].connected.push(c.name)
+            }
+            if (!this._subscriptionObservers[p]) {
+              this._observableSubscriptions[p] = await this._createSubscriptionObserver(p)
+            }
+            this._subscriptionObservers[p].next(this._subscriptionMap[p])
           }
-          if (!this._observers[p]) {
-            this._observableSubscriptions[p] = await this._createSubscriptionObserver(p)
-          }
-          this._observers[p].next(this._subscriptionMap[p])
         }
+        console.log('Coinbase active subscriptions:', Object.keys(this.subscriptions))
+      }
+    } else {
+      // disconnect if no more subscriptions
+      if (subscriptions.channels.length === 0) {
+        this._client.ws.disconnect()
+        this._wsClient = null
       }
     }
-    
   }
 
   /**
@@ -423,9 +488,9 @@ export class CoinbaseService {
     error: WebSocketErrorMessage
   ) {
     // TODO
-    // this._observers[].error(error)
+    // this._subscriptionObservers[].error(error)
     // delete this._subscriptionMap[productId]
-    console.error('Coinbase subscription error', error)
+    console.error('Coinbase subscription:', error)
   }
 
   /**
@@ -445,7 +510,103 @@ export class CoinbaseService {
     this._subscriptionMap[productId].ticker = message
     this._subscriptionMap[productId].lastUpdateProperty = 'ticker'
     this._subscriptionMap[productId].lastUpdate = new Date().getTime()
-    this._observers[productId].next(this._subscriptionMap[productId])
+    this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
+  }
+
+  /**
+   * Handle all Websocket Responses
+   * 
+   * @param message 
+   */
+  protected _handleSubscriptionMessage(
+    message: WebSocketResponse
+  ) {
+    const productId = (message as any).product_id
+
+    // event fired after unsubscribe
+    if (!this._subscriptionMap?.[productId]) return
+
+    // handle book updates
+    if (message.type === WebSocketResponseType.LEVEL2_UPDATE 
+      || message.type === WebSocketResponseType.LEVEL2_SNAPSHOT) {
+      this._handleSubscriptionBookMessage(message)
+    }
+
+    // handle order updates
+    if (message.type === WebSocketResponseType.FULL_OPEN
+      || message.type === WebSocketResponseType.LAST_MATCH 
+      || message.type === WebSocketResponseType.FULL_DONE) {
+      this._handleSubscriptionOrderMessage(message)
+    }
+  }
+
+  /**
+   * Handles order updates
+   * 
+   * @param message 
+   */
+  private async _handleSubscriptionOrderMessage(
+    message: WebSocketResponse
+  ) {
+    const productId = (message as any).product_id
+
+    // order created/placed by us (TODO validate profile_id?)
+    if (message.type === WebSocketResponseType.FULL_OPEN) {
+      const m = (message as any)
+      const orderId = m.order_id
+
+      if (orderId) {
+        const o = await this.getOrder(orderId)
+        this._subscriptionMap[productId].orders[o.id] = o        
+        this._subscriptionMap[productId].lastUpdateProperty = 'orders'
+        this._subscriptionMap[productId].lastUpdate = new Date().getTime()
+        // TODO this causes doubles
+        // this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
+        console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
+      }
+    }
+
+    // order matches
+    if (message.type === WebSocketResponseType.LAST_MATCH) {
+      const m = (message as WebSocketMatchMessage)
+      // const o = this._subscriptionMap[productId].orders[m.product_id]
+      console.log('COINBASE ORDER MATCH!', m)
+      // TODO handle partial fills?
+    }
+
+    // order "done" (removed from book)
+    // TODO message typing?
+    //   {
+    //     "type": "done",
+    //     "time": "2014-11-07T08:19:27.028459Z",
+    //     "product_id": "BTC-USD",
+    //     "sequence": 10,
+    //     "price": "200.2",
+    //     "order_id": "d50ec984-77a8-460a-b958-66f114b0de9b",
+    //     "reason": "filled", // or "canceled"
+    //     "side": "sell",
+    //     "remaining_size": "0"
+    // }
+    if (message.type === WebSocketResponseType.FULL_DONE) {
+      const m = (message as any) 
+      const o = this._subscriptionMap[productId].orders[m.order_id]
+      if (o) {
+        // update order with filled data
+        const filled = (o as FilledOrder)
+        filled.done_at = m.time
+        filled.done_reason = m.reason
+        filled.status = OrderStatus.DONE
+        filled.filled_size = bn(o.size).minus(m.remaining_size).toString()
+        filled.settled = true
+
+        this._subscriptionMap[productId].orders[o.id] = filled
+        this._subscriptionMap[productId].lastUpdateProperty = 'orders'
+        this._subscriptionMap[productId].lastUpdate = new Date().getTime()
+        this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
+        console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
+      }
+    }
+    
   }
 
   /**
@@ -460,9 +621,6 @@ export class CoinbaseService {
   ) {
     const productId = (message as any).product_id
 
-    // event fired after unsubscribe
-    if (!this._subscriptionMap?.[productId]) return
-
     // handle snapshot
     if (message.type === WebSocketResponseType.LEVEL2_SNAPSHOT) {
       for (let b = 0; b < (message as any).bids.length; b++) {
@@ -473,7 +631,7 @@ export class CoinbaseService {
       }
       this._subscriptionMap[productId].lastUpdateProperty = 'book'
       this._subscriptionMap[productId].lastUpdate = new Date().getTime()
-      this._observers[productId].next(this._subscriptionMap[productId])
+      this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
     }
 
     // handle update
@@ -510,7 +668,7 @@ export class CoinbaseService {
       
       this._subscriptionMap[productId].lastUpdateProperty = 'book'
       this._subscriptionMap[productId].lastUpdate = new Date().getTime()
-      this._observers[productId].next(this._subscriptionMap[productId])
+      this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
     }
   }
 

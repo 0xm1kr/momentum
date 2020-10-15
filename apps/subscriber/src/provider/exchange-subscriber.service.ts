@@ -11,6 +11,7 @@ import {
   AlpacaSubscription
 } from '@momentum/alpaca-client'
 import { ClockEvent } from '@momentum/events/clock.event'
+import { SubscriptionUpdateEvent, Trade } from '@momentum/events/subscription.event'
 import {
   ClockService,
   ClockIntervalText,
@@ -29,30 +30,11 @@ export type Exchange = {
   code?: string
 }
 
-export type Trade = {
-  id: string
-  price: string
-  size: string
-  timestamp: number // unix
-  side?: string
-  flags?: string[]
-  exchange?: string 
-}
-export type SubscriptionUpdate = {
-  pair: string
-  bestBid: string[]
-  bestAsk: string[]
-  bidLiquidity?: string
-  askLiquidity?: string
-  lastTrade: Trade
-  timestamp: number // unix
-}
-
 export type ExchangeSubscription = Observable<CoinbaseSubscription> // | Observable<AlpacaSubscription>
 export type Subscription = Record<string, ExchangeSubscription>
 export type ExchangeSubscriptions = Record<string, Subscription>
 
-export type SupscriptionUpdates = Record<string, SubscriptionUpdate[]>
+export type SupscriptionUpdates = Record<string, SubscriptionUpdateEvent[]>
 export type ExchangeSubscriptionUpdates = Record<string, SupscriptionUpdates>
 
 export type SubscriptionUpdateTimes = Record<string, number[]>
@@ -208,7 +190,7 @@ export class ExchangeSubscriberService {
    * @param exchange 
    * @param update 
    */
-  private _recordUpdate(exchange: string, update: SubscriptionUpdate) {
+  private _recordUpdate(exchange: string, update: SubscriptionUpdateEvent) {
     const pair = update.pair
 
     // init
@@ -238,8 +220,9 @@ export class ExchangeSubscriberService {
         const subscription = await this.coinbaseSvc.subscribe(pair)
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(100)))
+          .pipe(throttle(() => interval(200)))
           .subscribe((sub) => {
+            // console.log(sub)
             // setup handler
             this._handleCoinbaseSubscriptionUpdate(sub)
             // return once connected
@@ -279,10 +262,12 @@ export class ExchangeSubscriberService {
 
     this._recordUpdate('coinbase', {
       pair: update.productId,
+      property: update.lastUpdateProperty,
+      timestamp: update.lastUpdate,
       lastTrade,
       bestBid,
       bestAsk,
-      timestamp: update.lastUpdate
+      orders: update.orders
     })
   }
 
@@ -303,7 +288,7 @@ export class ExchangeSubscriberService {
         // wait for subscription
         subscription
           // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
-          .pipe(throttle(() => interval(100)))
+          .pipe(throttle(() => interval(200)))
           .subscribe((sub) => {
             // setup handler
             this._handleAlpacaSubscriptionUpdate(sub)
@@ -326,6 +311,7 @@ export class ExchangeSubscriberService {
    * @param update 
    */
   private _handleAlpacaSubscriptionUpdate(update: AlpacaSubscription) {
+    // TODO bad bid/ask spread?
     const bestBid = update.book?.bids?.max()
     const bestAsk = update.book?.asks?.min()
 
@@ -342,16 +328,18 @@ export class ExchangeSubscriberService {
       size: update.ticker?.s,
       timestamp: (update.ticker?.t / 1000), // micro second
       flags: update.ticker?.c,
-      exchange: this.exchanges[update.ticker?.x]?.code
+      exchange: this.exchanges[update.ticker?.x]?.name,
     } : null
 
     // record update
     this._recordUpdate('alpaca', {
       pair,
+      property: update.lastUpdateProperty,
+      timestamp: update.lastUpdate,
       lastTrade,
-      bestBid: bestBid ? [bestBid.p, bestBid.s, bestBid.t, this.exchanges[bestBid.x]?.code] : null,
-      bestAsk: bestAsk ? [bestAsk.p, bestAsk.s, bestAsk.t, this.exchanges[bestAsk.x]?.code] : null,
-      timestamp: update.lastUpdate
+      bestBid: bestBid ? [bestBid.p, bestBid.s, bestBid.t, this.exchanges[bestBid.x]?.name] : null,
+      bestAsk: bestAsk ? [bestAsk.p, bestAsk.s, bestAsk.t, this.exchanges[bestAsk.x]?.name] : null,
+      orders: update.orders
     })
   }
 }

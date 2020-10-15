@@ -1,8 +1,14 @@
 import { Injectable } from '@nestjs/common'
 import { Observable, Observer } from 'rxjs'
-import { AlpacaClient, AlpacaStream, PlaceOrder, Clock } from '@momentum/alpaca'
+import { AlpacaClient, AlpacaStream, PlaceOrder, Order, Clock, OrderSide, OrderStatus } from '@momentum/alpaca'
 import { RBTree } from 'bintrees'
-import { resolve as resolvePath } from 'path'
+
+export {
+  PlaceOrder,
+  Order,
+  OrderSide,
+  OrderStatus
+}
 
 export type AlpacaClock = {
   isOpen: boolean,
@@ -27,6 +33,7 @@ export type AlpacaSubscription = {
   book?: Book
   quote?: any
   ticker?: any
+  orders?: Record<string, Order>
   lastUpdate?: number // unix time
   lastUpdateProperty?: string // which property was updated
 }
@@ -37,35 +44,33 @@ export type AlpacaSubscriptions = Record<string, Observable<AlpacaSubscription>>
 export class AlpacaService {
 
   protected _client!: AlpacaClient
-  protected _stream!: AlpacaStream
+  protected _dataStream!: AlpacaStream
+  protected _accountStream!: AlpacaStream
 
   protected _heartbeatTimeout = 30000
   protected _clockCheckInterval = 30000
-  protected _connected = false
+  protected _dataConnected = false
+  protected _accountConnected = false
   protected _heartbeat!: NodeJS.Timeout
   protected _lastHeartBeat: number = null
   protected _clock!: AlpacaClock
   protected _observableClock: Observable<AlpacaClock>
   protected _observableSubscriptions: AlpacaSubscriptions = {}
   protected _subscriptionMap: Record<string, AlpacaSubscription> = {}
-  protected _observers: Record<string, Observer<AlpacaSubscription>> = {}
+  protected _subscriptionObservers: Record<string, Observer<AlpacaSubscription>> = {}
 
   constructor() {
     this._client = new AlpacaClient({
       credentials: {
-        key: process.env.ALPACA_KEY,
-        secret: process.env.ALPACA_SECRET
+        key: process.env.PAPER_ALPACA_KEY,
+        secret: process.env.PAPER_ALPACA_SECRET
       },
       paper: true
       // rate_limit: true
     })
   }
 
-  public get clock(): AlpacaClock {
-    return this._clock
-  }
-
-  public get clock$(): Promise<Observable<AlpacaClock>> {
+  public get clock(): Promise<Observable<AlpacaClock>> {
     if (this._observableClock) {
       return Promise.resolve(this._observableClock)
     }
@@ -74,10 +79,19 @@ export class AlpacaService {
   }
 
   public get connection(): Promise<AlpacaStream> {
-    if (this._connected) {
-      return Promise.resolve(this._stream)
+    if (this._dataConnected && this._accountConnected) {
+      return Promise.resolve(this._dataStream)
     }
-    return this._connect()
+
+    return new Promise((res, rej) => {
+      Promise.all([
+        this._connectAccountStream(),
+        this._connectDataStream()
+      ])
+        .then(() => res(this._dataStream))
+        .catch((e) => rej(e))
+    })
+    
   }
 
   public get subscriptions() {
@@ -106,6 +120,15 @@ export class AlpacaService {
   }
 
   /**
+   * Get an order
+   * 
+   * @param orderId
+   */
+  public getOrder(orderId: string) {
+    return this._client.getOrder({ order_id: orderId })
+  }
+
+  /**
    * Place a limit order
    * 
    * @param symbol 
@@ -113,7 +136,7 @@ export class AlpacaService {
    */
   public limitOrder(symbol: string, params: {
     size: number
-    side: 'buy' | 'sell'
+    side: OrderSide
     price: number
     stopPrice?: number
   }) {
@@ -125,7 +148,7 @@ export class AlpacaService {
       type: 'limit',
       time_in_force: 'fok' // ?
       // extended_hours?: boolean;
-      // client_order_id?: string;
+      // id?: string;
       // trail_price?: number;
       // trail_percent?: number;
       // order_class?: 'simple' | 'bracket' | 'oco' | 'oto';
@@ -141,6 +164,28 @@ export class AlpacaService {
       }
     } else {
       order.limit_price = params.price
+    }
+
+    return this._client.placeOrder(order)
+  }
+
+   /**
+   * Place a market order
+   * 
+   * @param symbol 
+   * @param params 
+   */
+  public marketOrder(symbol: string, params: {
+    size: number
+    side: OrderSide
+  }) {
+
+    const order: PlaceOrder = {
+      symbol,
+      qty: params.size,
+      side: params.side,
+      type: 'market',
+      time_in_force: 'fok'
     }
 
     return this._client.placeOrder(order)
@@ -164,19 +209,17 @@ export class AlpacaService {
     // setup observer
     await this._createSubscriptionObserver(symbol)
 
-    // subscribe
-    // TODO subscribe / resubscribe all
+    // unsubscribe but leave observables 
+    // allowing conn to auto re-subscribe to all
     const subs = [`T.${symbol}`, `Q.${symbol}`]
     Object.keys(this.subscriptions).forEach(s => {
       subs.push(`T.${s}`)
       subs.push(`Q.${s}`)
     })
-    // unsubscribe but leave observables 
-    // allowing conn to auto re-subscribe to all
     conn.unsubscribe(subs)
 
     // if markets are closed just resolve
-    if (!this.clock?.isOpen) {
+    if (!this._clock?.isOpen) {
       return Promise.resolve(this._observableSubscriptions[symbol])
     }
 
@@ -205,10 +248,9 @@ export class AlpacaService {
       // remove data
       delete this._subscriptionMap[symbol]
       delete this._observableSubscriptions[symbol]
-      delete this._observers[symbol]
+      delete this._subscriptionObservers[symbol]
 
-      // unsubscribe to
-      // trigger auto-rescribe
+      // unsubscribe
       const subs = []
       Object.keys(this.subscriptions).forEach(s => {
         subs.push(`T.${s}`)
@@ -216,7 +258,7 @@ export class AlpacaService {
       })
       ;(await (this.connection)).unsubscribe(subs)
 
-      // TODO await actual disconnect message?
+      // TODO await actual disconnect?
       
     } catch (err) {
       console.warn(err)
@@ -273,14 +315,18 @@ export class AlpacaService {
   }
 
   /**
-   * Connect to Coinbase Websocket
+   * Connect to Alpaca Data stream Websocket(s)
    */
-  protected async _connect(): Promise<AlpacaStream> {
+  protected async _connectDataStream(): Promise<AlpacaStream> {
+    if (this._dataConnected) {
+      return Promise.resolve(this._dataStream)
+    }
 
+    // connect to market data
     return new Promise((res, rej) => {
 
-      // connect
-      this._stream = new AlpacaStream({
+      // data stream
+      this._dataStream = new AlpacaStream({
         credentials: {
           key: process.env.ALPACA_KEY,
           secret: process.env.ALPACA_SECRET
@@ -289,25 +335,123 @@ export class AlpacaService {
       })
 
       // on open
-      this._stream.on('authenticated', this._handleStreamAuth.bind(this, res))
+      this._dataStream.on('authenticated', this._handleStreamAuth.bind(this, res))
 
       // on error
-      this._stream.on('error', (e) => {
+      this._dataStream.on('error', (e) => {
         console.error(e)
-        this._connected = false
+        this._dataConnected = false
         rej(e)
       })
 
       // generic message
-      this._stream.on('message', this._handleSubscriptionMessage.bind(this))
+      this._dataStream.on('message', this._handleSubscriptionMessage.bind(this))
 
       // ticker message
-      this._stream.on('trade', this._handleSubscriptionTradeMessage.bind(this))
+      this._dataStream.on('trade', this._handleSubscriptionTradeMessage.bind(this))
 
       // quote update
-      this._stream.on('quote', this._handleSubscriptionQuoteMessage.bind(this)
-      )
+      this._dataStream.on('quote', this._handleSubscriptionQuoteMessage.bind(this))
     })
+  }
+
+  /**
+   * Connect to Alpaca Account Websocket
+   */
+  protected async _connectAccountStream(): Promise<AlpacaStream> {
+
+    if (this._accountConnected) {
+      return Promise.resolve(this._accountStream)
+    }
+
+    return new Promise((res, rej) => {
+      
+      // TODO account socket heartbeat?
+
+      // init account stream
+      this._accountStream = new AlpacaStream({
+        credentials: {
+          key: process.env.PAPER_ALPACA_KEY,
+          secret: process.env.PAPER_ALPACA_SECRET
+        },
+        stream: 'account',
+        paper: true
+      })
+
+      // wait for connection
+      this._accountStream.on('message', (message: Record<string, any>) => {
+        if ('stream' in message && message.data?.streams?.length) { 
+          console.log('Alpaca account stream connected')
+          this._accountConnected = true
+          res(this._accountStream)
+        }
+      })
+
+      // on error
+      this._accountStream.on('error', (e) => {
+        // TODO resolve if "already connected error"
+        console.error('ALPACA ACCOUNT ERROR', e)
+        this._accountConnected = false
+        rej(e)
+      })
+
+      // handle order updates
+      this._accountStream.on('trade_updates', this._handleOrderUpdates.bind(this))
+
+      // on open
+      this._accountStream.on('authenticated', () => {
+        // subscribe to trade_updates
+        this._accountStream.subscribe(['trade_updates'])
+      })
+
+    })
+  }
+
+  /**
+   * Handle alpaca order updates
+   * 
+   * @param message 
+   */
+  protected async _handleOrderUpdates(message: Record<string, any>) {
+    const symbol = message.order?.symbol
+
+    // not listening to this book
+    if (!symbol || !this._subscriptionMap[symbol]) return
+
+    // new order Created
+    if (message.event === 'new') {
+      if (message.order) {
+        this._subscriptionMap[symbol].orders[message.order.id] = message.order     
+        this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
+        this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
+        // TODO this could cause dupes?
+        // this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
+        console.log('ALPACA ORDER CREATED!', message.order)
+      }
+    }
+
+    // updated order
+    if ([
+        'fill', 
+        'partial_fill', 
+        'canceled', 
+        'expired', 
+        'replaced', 
+        'rejected', 
+        'suspended'
+      ].includes(message.event)) {
+
+      // retrieve local instance of order
+      const o = this._subscriptionMap[symbol].orders[message.order?.id]
+      if (o) {
+        // update local order with updated order
+        this._subscriptionMap[symbol].orders[o.id] = message.order
+        this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
+        this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
+        this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
+        console.log('ALPACA ORDER UPDATED!', message.order)
+      }
+    }
   }
 
   /**
@@ -330,14 +474,15 @@ export class AlpacaService {
       ticker: null,
       quote: null,
       book: {
-        bids: new RBTree((a, b) => (a.t - b.t || a.p - b.p)),
-        asks: new RBTree((a, b) => (a.t - b.t || a.p - b.p))
-      }
+        bids: new RBTree((a, b) => (a.p > b.p) ? 1 : (a.p === b.p) ? 0 : -1),
+        asks: new RBTree((a, b) => (a.p > b.p) ? 1 : (a.p === b.p) ? 0 : -1),
+      },
+      orders: {}
     }
 
     // setup observable
     this._observableSubscriptions[symbol] = new Observable<AlpacaSubscription>(subject => {
-      this._observers[symbol] = subject
+      this._subscriptionObservers[symbol] = subject
 
       // setup unsubscribe function
       // TODO what if this fails?
@@ -358,7 +503,7 @@ export class AlpacaService {
     console.log('Alpaca connection established')
 
     // init clock
-    const clock = await this._initClock()
+    const clock = await this.clock
     clock.subscribe((c) => {
       if (!c.isOpen) {
         console.log(`Alpaca markets closed, markets re-open in ${Math.round(c?.timeToOpen)}min`)
@@ -369,8 +514,8 @@ export class AlpacaService {
     this._initHeartBeat()
 
     // resolve
-    this._connected = true
-    res(this._stream)
+    this._dataConnected = true
+    res(this._dataStream)
   }
 
   /**
@@ -417,13 +562,13 @@ export class AlpacaService {
           if (subscriptions) {
             for (const s of subscriptions) {
               const symbol = s.split('.')[1]
-              if (!this._observers[symbol]) {
+              if (!this._subscriptionObservers[symbol]) {
                 await this._createSubscriptionObserver(symbol)
               }
               if (!this._subscriptionMap[symbol].connected.includes(s)) {
                 this._subscriptionMap[symbol].connected.push(s)
               }
-              this._observers[symbol].next(this._subscriptionMap[symbol])
+              this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
             }
             console.log('Alpaca active subscriptions', subscriptions)
           }
@@ -449,7 +594,7 @@ export class AlpacaService {
     this._subscriptionMap[symbol].ticker = message
     this._subscriptionMap[symbol].lastUpdateProperty = 'ticker'
     this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
-    this._observers[symbol].next(this._subscriptionMap[symbol])
+    this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
   }
 
   /**
@@ -467,15 +612,6 @@ export class AlpacaService {
     if (!this._subscriptionMap?.[symbol]) return
 
     this._subscriptionMap[symbol].quote = message
-
-    // Clear out old/outdated quotes
-    // TODO better way to handle this would
-    // ideally be to store bid/asks as a unique
-    // by exchange code sorted by price list
-    if (this._subscriptionMap[symbol].book.asks.size > 10) {
-      this._subscriptionMap[symbol].book.bids.clear()
-      this._subscriptionMap[symbol].book.asks.clear()
-    }
     
     const bid = {
       p: message.p,
@@ -491,9 +627,29 @@ export class AlpacaService {
     }
     this._subscriptionMap[symbol].book.bids.insert(bid)
     this._subscriptionMap[symbol].book.asks.insert(ask)
+
+    // Clear out old/outdated quotes
+    // TODO better way to handle this?   
+    if (this._subscriptionMap[symbol].book.asks.size > 10) {
+      const now = new Date().getTime()
+      this._subscriptionMap[symbol].book.asks.each(a => {
+        if (now - (a.t/1000000) > 1000) {
+          this._subscriptionMap[symbol].book.asks.remove(a)
+        }
+      })
+    }
+    if (this._subscriptionMap[symbol].book.bids.size > 10) {
+      const now = new Date().getTime()
+      this._subscriptionMap[symbol].book.bids.each(b => {
+        if (now - (b.t/1000000) > 1000) {
+          this._subscriptionMap[symbol].book.bids.remove(b)
+        }
+      })
+    }
+
     this._subscriptionMap[symbol].lastUpdateProperty = 'quote'
     this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
-    this._observers[symbol].next(this._subscriptionMap[symbol])
+    this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
   }
 
   /**
