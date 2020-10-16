@@ -18,7 +18,7 @@ async function bootstrap() {
   app.listen(
     () => {
       console.log('')
-      console.log('🗞️🗞️🗞️🗞️  Momentum Subscriber Activated 🗞🗞️🗞️🗞️')
+      console.log('🦙🦙🦙🦙🦙 Alpaca Subscriber Ready 🦙🦙🦙🦙🦙')
     }
   )
 }

@@ -16,11 +16,9 @@ export type Clocks = {
     [key in ClockIntervalText]?: Record<string, NodeJS.Timeout|null>
 }
 
-export type ExchangeClocks = Record<string, Clocks>
-
 @Injectable()
 export class ClockService {
-    protected _clocks: ExchangeClocks = {}
+    protected _clocks: Clocks = {}
 
     public get clocks() {
         return this._clocks
@@ -34,32 +32,27 @@ export class ClockService {
      * @param pair 
      */
     public start(
-        exchange: string, 
         interval: ClockIntervalText, 
         pair: string,
         handler: (
             interval: ClockIntervalText,
-            exchange: string,
             pair: string
         ) => unknown
-    ): ExchangeClocks {
+    ): Clocks {
         // init
-        if (typeof this._clocks[exchange] === 'undefined') {
-            this._clocks[exchange] = {}
-        }
-        if (typeof this._clocks[exchange][interval] === 'undefined') {
-            this._clocks[exchange][interval] = {}
+        if (typeof this._clocks[interval] === 'undefined') {
+            this._clocks[interval] = {}
         }
 
         // reset
-        if (this._clocks[exchange][interval][pair]) {
-            clearInterval(this._clocks[exchange][interval][pair])
+        if (this._clocks[interval][pair]) {
+            clearInterval(this._clocks[interval][pair])
         }
 
         // start
-        this._clocks[exchange][interval][pair] = setInterval(
+        this._clocks[interval][pair] = setInterval(
             () => {
-                handler(interval, exchange,  pair)
+                handler(interval, pair)
             }, 
             ClockInterval[interval]
         )
@@ -76,12 +69,11 @@ export class ClockService {
      * @param pair
      */
     public stop(
-        exchange: string, 
         interval: ClockIntervalText, 
         pair: string
     ): void {
        try {
-        clearInterval(this._clocks[exchange][interval][pair])
+        clearInterval(this._clocks[interval][pair])
        } catch(err){}
     }
 }

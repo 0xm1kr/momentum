@@ -34,6 +34,7 @@
     "nestjs-redis": "^1.2.8",
     "reconnecting-websocket": "^4.4.0",
     "redis": "^3.0.2",
+    "redlock": "^4.2.0",
     "reflect-metadata": "^0.1.13",
     "rimraf": "^3.0.2",
     "rxjs": "^6.5.4"
@@ -86,7 +87,9 @@
       "@momentum/events/(.*)": "<rootDir>/libs/events/src/$1",
       "@momentum/events": "<rootDir>/libs/events/src",
       "@momentum/alpaca/(.*)": "<rootDir>/libs/alpaca/src/$1",
-      "@momentum/alpaca": "<rootDir>/libs/alpaca/src"
+      "@momentum/alpaca": "<rootDir>/libs/alpaca/src",
+      "@momentum/clock/(.*)": "<rootDir>/libs/clock/src/$1",
+      "@momentum/clock": "<rootDir>/libs/clock/src"
     }
   },
   "volta": {
