@@ -47,12 +47,10 @@ export class AlpacaService {
   protected _dataStream!: AlpacaStream
   protected _accountStream!: AlpacaStream
 
-  protected _heartbeatTimeout = 30000
+
   protected _clockCheckInterval = 30000
   protected _dataConnected = false
   protected _accountConnected = false
-  protected _heartbeat!: NodeJS.Timeout
-  protected _lastHeartBeat: number = null
   protected _clock!: AlpacaClock
   protected _observableClock: Observable<AlpacaClock>
   protected _observableSubscriptions: AlpacaSubscriptions = {}
@@ -510,9 +508,6 @@ export class AlpacaService {
       }
     })
 
-    // init heartbeat
-    this._initHeartBeat()
-
     // resolve
     this._dataConnected = true
     res(this._dataStream)
@@ -539,9 +534,6 @@ export class AlpacaService {
         console.log('Alpaca active subscriptions', subs)
       }
     }
-
-    // set up heart beat
-    this._handleHeartBeatMessage.call(this)
 
     if ('stream' in message) {
       // syncronize local subs and connected subs
@@ -650,27 +642,6 @@ export class AlpacaService {
     this._subscriptionMap[symbol].lastUpdateProperty = 'quote'
     this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
     this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
-  }
-
-  /**
-   * Set last message date
-   */
-  protected _handleHeartBeatMessage() {
-    this._lastHeartBeat = new Date().getTime()
-  }
-
-  /**
-   * handle heartbeat logic
-   */
-  protected _initHeartBeat() {
-    const activeSubs = Object.keys(this._subscriptionMap)?.length
-    if (activeSubs && this._heartbeat && this._clock?.isOpen) {
-      const now = new Date().getTime()
-      if ((now - this._lastHeartBeat) > this._heartbeatTimeout) {
-        throw new Error('Alpaca heartbeat timed out!')
-      }
-    }
-    this._heartbeat = setTimeout(this._initHeartBeat.bind(this), this._heartbeatTimeout)
   }
 
 }

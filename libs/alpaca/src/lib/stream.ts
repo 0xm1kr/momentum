@@ -33,6 +33,9 @@ export class AlpacaStream extends EventEmitter {
   private connection: WebSocket
   private subscriptions: string[] = []
   private authenticated = false
+  protected lastHeartBeat = null
+  protected heartbeat: NodeJS.Timeout = null
+  protected heartbeatTimeout = 10000
 
   constructor(
     protected params: {
@@ -55,7 +58,7 @@ export class AlpacaStream extends EventEmitter {
       default:
         this.host = 'unknown'
     }
-
+    
     this.connection = new WebSocket(this.host)
       .once('open', () => {
         // if we are not authenticated yet send a request now
@@ -84,6 +87,8 @@ export class AlpacaStream extends EventEmitter {
         if ('stream' in object && object.stream == 'authorization') {
           if (object.data.status == 'authorized') {
             this.authenticated = true
+            // init heartbeat
+            this.initHeartBeat.apply(this)
             this.emit('authenticated', this)
           } else {
             this.connection.close()
@@ -113,6 +118,10 @@ export class AlpacaStream extends EventEmitter {
       })
       // pass the error
       .on('error', (err: Error) => this.emit('error', err))
+      .on('pong', () => {
+        this.lastHeartBeat = new Date().getTime()
+      })
+      
   }
 
   send(message: any): this {
@@ -169,7 +178,26 @@ export class AlpacaStream extends EventEmitter {
 
   close() {
     if (this.connection.OPEN) {
+      if (this.heartbeat) {
+        clearTimeout(this.heartbeat)
+      }
       this.connection.close()
     }
   }
+
+  // ----- internal methods ------
+
+  protected initHeartBeat() {
+    if (this.connection.OPEN && this.heartbeat) {
+      const now = new Date().getTime()
+      if ((now - this.lastHeartBeat) > this.heartbeatTimeout) {
+        throw new Error('Alpaca heartbeat timed out!')
+      }
+    }
+    this.connection.ping()
+    this.heartbeat = setTimeout(() => {
+      this.initHeartBeat()
+    }, this.heartbeatTimeout)
+  }
+
 }
