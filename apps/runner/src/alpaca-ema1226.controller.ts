@@ -17,8 +17,6 @@ export type AlgorithmData = {
     ema12: number[]
     ema26: number[]
     size: string
-    lastBuy?: TradeEvent
-    lastSell?: TradeEvent
 }
 
 export type ActivePairs = Record<string, AlgorithmData>
@@ -31,11 +29,12 @@ export class AlpacaEMA1226Controller {
         private readonly alpSvc: AlpacaService
     ) { }
 
-    // TODO move all of this to a service
-    private MARGIN = 0.001
+    private MARGIN = 0.006
     private redis: Redis
     private redlock: Redlock
     private activePairs: ActivePairs = {}
+
+    private pendingOrderResolver!: (value: Order) => void
     private pendingOrder!: Order
 
     async onApplicationBootstrap() {
@@ -55,8 +54,8 @@ export class AlpacaEMA1226Controller {
                 console.log('lastTrade', lastTrade)
                 this._start({
                     ...params as AlgorithmEvent,
-                    lastTrade: Object.keys(lastTrade).length 
-                        ? `${lastTrade.side},${lastTrade.price},${lastTrade.time}` 
+                    lastTrade: Object.keys(lastTrade).length
+                        ? `${lastTrade.side},${lastTrade.price},${lastTrade.time}`
                         : (params as AlgorithmEvent).lastTrade
                 })
             }
@@ -67,26 +66,19 @@ export class AlpacaEMA1226Controller {
     async handleUpdate(data: SubscriptionUpdateEvent) {
         if (!this.activePairs[data.pair]) return
 
-        // lock while handling this event
-        let lock: Redlock.Lock
-        try {
-            lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 5000)
-        } catch(err){
-            console.log(`algorithms:ema1226:alpaca:${data.pair} locked...`)
-            return
-        }
+        // get last trade
+        const lastTrade = (await this.redis.hgetall(`trade:alpaca:ema1226:${data.pair}`) as unknown) as TradeEvent
 
-        // check if pending order is updated
-        const order = data.orders[this.pendingOrder?.id]
+        // check for pending order updates
+        const order = (data.orders[this.pendingOrder?.id] as Order)
         if (order) {
-            this._checkPendingOrder(data.pair, order as Order)
+            await this._checkPendingOrder(order, lastTrade)
         }
 
-        // pause trading while pending
-        // TODO timeout?
-        if (this.pendingOrder) return
-
+        // perform algo logic
         if (this.activePairs[data.pair].ema26.length) {
+
+            // setup data
             const bestAsk = data.bestAsk
             const bestBid = data.bestBid
             const ema12 = bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 1])
@@ -96,8 +88,9 @@ export class AlpacaEMA1226Controller {
             const ema26Slope = bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 1])
                 .minus(bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 2]))
 
+            // log data
             console.log('-------------------------')
-            console.log('-----',data.pair,'-----')
+            console.log('-----', data.pair, '-----')
             console.log(`bestAsk ${data.bestAsk}`)
             console.log(`bestBid ${data.bestBid}`)
             console.log(`ema12 ${ema12}, ${ema12Slope}`)
@@ -112,28 +105,42 @@ export class AlpacaEMA1226Controller {
             if (bn(ema12).lt(ema26)
                 && ema12Slope.lt(0)
                 && ema26Slope.lt(0)
-                && !this.activePairs[data.pair].lastSell
+                && (lastTrade?.side !== 'sell')
             ) {
-                const lastBuyPrice = this.activePairs[data.pair].lastBuy?.price || 0
-                const reqPrice = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN))) // min profit to capture
+                const lastBuyPrice = lastTrade?.price || 0
+                const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
+                const curFee = bn(bestAsk[0]).times(0.001)
+                const reqPrice = lastTotal.plus(curFee)
                 console.log('required sell price:', reqPrice.toString())
-                if (!this.activePairs[data.pair].lastSell && (!this.activePairs[data.pair].lastBuy || reqPrice.lt(bestAsk[0]))) {
-                    const symbol = data.pair.split('-')[0]
-                    const order = {
-                        symbol,
-                        size: Number(this.activePairs[data.pair].size),
-                        side: 'sell' as OrderSide,
-                        price: Number(bestAsk[0]),
-                        time: new Date().getTime()
-                    }
+                if (lastTrade?.side === 'buy' && reqPrice.lt(bestAsk[0])) {
+
+                    // get a lock
+                    let lock: Redlock.Lock
                     try {
-                        // place order
-                        if (this.pendingOrder) return
-                        this.pendingOrder = await this.alpSvc.limitOrder(symbol, order)
-                        console.log('Sell order placed!', this.pendingOrder)
-                    } catch (err) {
+                        lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 61000)
+                    } catch(err){
+                        console.log(`algorithms:ema1226:alpaca:${data.pair} locked...`)
+                        return
+                    }
+
+                    // place an order
+                    try {
+                        const symbol = data.pair.split('-')[0]
+                        const completeOrder = await this._placeOrder({
+                            symbol,
+                            size: Number(this.activePairs[data.pair].size),
+                            side: 'sell' as OrderSide,
+                            price: Number(bestAsk[0]),
+                            time: new Date().getTime()
+                        })
+                        console.log('Alpaca sell order', completeOrder)
+                    } catch(err) {
                         console.error(err)
                     }
+
+                    // release lock
+                    await lock.unlock()
+
                 }
             }
 
@@ -143,40 +150,48 @@ export class AlpacaEMA1226Controller {
             if (bn(ema12).gt(ema26)
                 && ema12Slope.gt(0)
                 && ema26Slope.gt(0)
-                && !this.activePairs[data.pair].lastBuy
+                && (lastTrade?.side !== 'buy')
             ) {
-                const lastSellPrice = this.activePairs[data.pair].lastSell?.price || 0
-                const reqPrice = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN))) // max dip before going long
+                console.log(lastTrade)
+                const lastSellPrice = lastTrade?.price || 0
+                const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
+                const curFee = bn(bestBid[0]).times(0.001)
+                const reqPrice = lastTotal.minus(curFee)
 
                 console.log('required buy price', reqPrice.toString())
-                if (!this.activePairs[data.pair].lastBuy && (!this.activePairs[data.pair].lastSell || bn(reqPrice).gt(bestBid[0]))) {
-                    const symbol = data.pair.split('-')[0]
-                    const order = {
-                        symbol,
-                        size: Number(this.activePairs[data.pair].size),
-                        side: 'buy' as OrderSide,
-                        price: Number(bestBid[0]),
-                        time: new Date().getTime()
-                    }
+                if ((lastTrade?.side === 'sell' && bn(reqPrice).gt(bestBid[0]))) {
+                    // get a lock 
+                    let lock: Redlock.Lock
                     try {
-                        // place order
-                        if (this.pendingOrder) return
-                        this.pendingOrder = await this.alpSvc.limitOrder(symbol, order)
-                        console.log('Buy order placed!', this.pendingOrder)
-                    } catch (err) {
+                        lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 60000)
+                    } catch(err){
+                        console.log(`algorithms:ema1226:alpaca:${data.pair} locked...`)
+                        return
+                    }
+
+                    // place an order
+                    try {
+                        const symbol = data.pair.split('-')[0]
+                        const completeOrder = await this._placeOrder( {
+                            symbol,
+                            size: Number(this.activePairs[data.pair].size),
+                            side: 'buy' as OrderSide,
+                            price: Number(bestBid[0]),
+                            time: new Date().getTime()
+                        })
+                        console.log('Alpaca buy order', completeOrder)
+                    } catch(err) {
                         console.error(err)
                     }
+
+                    // release lock
+                    await lock.unlock()
+
                 }
             }
         }
-
-        // unlock
-        lock.unlock()
     }
 
-    /**
-     * calculate 1min 12/26 moving average
-     */
     @EventPattern('clock:1m:alpaca')
     async handleOneMin(data: ClockEvent): Promise<void> {
         if (!this.activePairs[data.pair]) return
@@ -185,9 +200,6 @@ export class AlpacaEMA1226Controller {
         }
     }
 
-    /**
-     * calculate 5min 12/26 moving average
-     */
     @EventPattern('clock:5m:alpaca')
     async handleFiveMin(data: ClockEvent): Promise<void> {
         if (!this.activePairs[data.pair]) return
@@ -196,9 +208,6 @@ export class AlpacaEMA1226Controller {
         }
     }
 
-    /**
-     * calculate 15min 12/26 moving average
-     */
     @EventPattern('clock:15m:alpaca')
     async handleFifteenMin(data: ClockEvent): Promise<void> {
         if (!this.activePairs[data.pair]) return
@@ -207,19 +216,19 @@ export class AlpacaEMA1226Controller {
         }
     }
 
-    @EventPattern('stop:ema1226:alpaca')
-    async handleStop(data: AlgorithmEvent) {
-        console.log('stopping', data.pair)
-        delete this.activePairs[data.pair]
-        await this.redis.del(`algorithms:ema1226:alpaca:${data.pair}`)
-    }
-
     @EventPattern('start:ema1226:alpaca')
     async handleStart(data: AlgorithmEvent) {
         // persist config
         await this.redis.hmset(`algorithms:ema1226:alpaca:${data.pair}`, { ...data })
         // start
         await this._start(data)
+    }
+
+    @EventPattern('stop:ema1226:alpaca')
+    async handleStop(data: AlgorithmEvent) {
+        console.log('stopping', data.pair)
+        delete this.activePairs[data.pair]
+        await this.redis.del(`algorithms:ema1226:alpaca:${data.pair}`)
     }
 
     /**
@@ -237,14 +246,12 @@ export class AlpacaEMA1226Controller {
             startTime: startTime.getTime(),
             period: data.period,
             size: data.size,
-            lastBuy: null,
-            lastSell: null,
             pricePeriods: [],
             ema12: [],
-            ema26: [],
+            ema26: []
         }
 
-        // previous trades
+        // init with previous trade
         if (data.lastTrade) {
             const lt = data.lastTrade.split(',')
             const order = {
@@ -256,19 +263,14 @@ export class AlpacaEMA1226Controller {
                 delta: '0',
                 exchange: 'alpaca'
             }
-            if (lt[0] === 'buy') {
-                this.activePairs[data.pair].lastBuy = order
-            }
-            if (lt[0] === 'sell') {
-                this.activePairs[data.pair].lastSell = order
-            }
+
             // persist last trade
             // NOTE: overwrites last trade!
-            this.redis.hmset(`trade:alpaca:ema1226:${data.pair}`, order)
+            await this.redis.hmset(`trade:alpaca:ema1226:${data.pair}`, order)
         }
 
         // log info
-        console.log(`STARTING: ALPACA EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
+        console.log(`ALPACA EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2), data.lastTrade)
 
         // backfill price data
         // TODO more than USD?
@@ -280,7 +282,21 @@ export class AlpacaEMA1226Controller {
         }
         const candles = await this.alpSvc.getBars(symbol, clockP[data.period])
         // console.log(candles)
-        this.activePairs[data.pair].pricePeriods = candles[symbol].map(c => (c.c))
+        this.activePairs[data.pair].pricePeriods = candles[symbol]?.map(c => (c.c))
+    }
+
+    /**
+     * Place an order
+     * 
+     * @param order 
+     */
+    private async _placeOrder(order: any) {
+        return new Promise<Order>((resolve, reject) => {
+            this.pendingOrderResolver = resolve
+            this.alpSvc.limitOrder(order.pair, order)
+                .then(o => (this.pendingOrder = o))
+                .catch(err => (reject(err)))
+        })
     }
 
     /**
@@ -289,8 +305,10 @@ export class AlpacaEMA1226Controller {
      * @param pair
      * @param order 
      */
-    private async _checkPendingOrder(pair: string, order: Order) {
-        
+    private async _checkPendingOrder(order: Order, lastTrade?: TradeEvent) {
+
+        console.log('CHECK ORDER', order)
+
         if (order.status === 'filled') {
             const trade = {
                 id: order.id,
@@ -302,43 +320,40 @@ export class AlpacaEMA1226Controller {
                 delta: '0',
                 time: new Date(order.filled_at).getTime()
             }
-            trade.delta = this._getOrderDelta(pair, trade),
-
-            this.activePairs[pair].lastSell = trade.side === 'sell' ? trade : null
-            this.activePairs[pair].lastBuy = trade.side === 'buy' ? trade : null
+            trade.delta = this._getTradeDelta(trade, lastTrade)
 
             // TODO array?
-            await this.redis.hmset(`trade:alpaca:ema1226:${pair}`, trade)
+            await this.redis.hmset(`trade:alpaca:ema1226:${trade.pair}`, trade as any)
             this.momentum.emit('trade:alpaca', trade)
         }
 
-        // TODO partial fills?
+        // partially filled but done (cancel/expire)
+        // TODO 
 
+        // clear pending order
         if (['filled','canceled','expired','stopped','rejected','suspended'].includes(order.status)) {
-            // clear pending order
-            if (this.pendingOrder?.id === order.id) {
-                this.pendingOrder = null
-            }
+            this.pendingOrderResolver(order)
+            this.pendingOrderResolver = null
+            this.pendingOrder = null
         }
+
     }
 
     /**
      * Calc delta from last trade
      * 
-     * @param pair 
-     * @param order 
+     * @param trade 
+     * @param lastTrade 
      */
-    private _getOrderDelta(pair: string, order: TradeEvent) {
+    private _getTradeDelta(trade: TradeEvent, lastTrade: TradeEvent) {
         let delta = '0'
-        const active = this.activePairs[pair]
-        const lastBuy = this.activePairs[pair].lastBuy
-        const lastSell = this.activePairs[pair].lastSell
-        if (order.side === 'sell' && lastBuy) {
-            const diff = bn(order.price).minus(lastBuy.price)
+        const active = this.activePairs[trade.pair]
+        if (trade.side === 'sell' && lastTrade) {
+            const diff = bn(trade.price).minus(lastTrade.price)
             delta = diff.times(active.size).toString()
-        } 
-        if (order.side === 'buy' && lastSell) {
-            const diff = bn(lastSell.price).minus(order.price)
+        }
+        if (trade.side === 'buy' && lastTrade) {
+            const diff = bn(lastTrade.price).minus(trade.price)
             delta = diff.times(active.size).toString()
         }
         return delta
@@ -364,7 +379,7 @@ export class AlpacaEMA1226Controller {
         // calculate moving averages
         if (this.activePairs[data.pair].pricePeriods.length >= 12) {
             this.activePairs[data.pair].ema12 = ema(this.activePairs[data.pair].pricePeriods, 12)
-            
+
             // emit for analysis
             const length = this.activePairs[data.pair].ema12.length
             this.momentum.emit('ema:alpaca', new EMAEvent(
@@ -374,7 +389,7 @@ export class AlpacaEMA1226Controller {
                 this.activePairs[data.pair].ema12[length - 1],
                 new Date().getTime()
             ))
-            
+
             // shift one off
             this.activePairs[data.pair].pricePeriods.shift()
         }

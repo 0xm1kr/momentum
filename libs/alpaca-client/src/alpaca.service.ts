@@ -424,7 +424,7 @@ export class AlpacaService {
         this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
         // TODO this could cause dupes?
         // this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
-        console.log('ALPACA ORDER CREATED!', message.order)
+        // console.log('ALPACA ORDER CREATED!', message.order)
       }
     }
 
@@ -447,7 +447,7 @@ export class AlpacaService {
         this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
         this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
         this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
-        console.log('ALPACA ORDER UPDATED!', message.order)
+        // console.log('ALPACA ORDER UPDATED!', message.order)
       }
     }
   }

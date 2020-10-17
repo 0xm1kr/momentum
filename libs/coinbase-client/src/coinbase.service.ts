@@ -562,7 +562,7 @@ export class CoinbaseService {
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
         // TODO this causes doubles
         // this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
+        // console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
       }
     }
 
@@ -570,7 +570,7 @@ export class CoinbaseService {
     if (message.type === WebSocketResponseType.LAST_MATCH) {
       const m = (message as WebSocketMatchMessage)
       // const o = this._subscriptionMap[productId].orders[m.product_id]
-      console.log('COINBASE ORDER MATCH!', m)
+      // console.log('COINBASE ORDER MATCH!', m)
       // TODO handle partial fills?
     }
 
@@ -603,7 +603,7 @@ export class CoinbaseService {
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
         this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
+        // console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
       }
     }
     
