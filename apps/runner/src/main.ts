@@ -18,7 +18,7 @@ async function bootstrap() {
   app.listen(
     () => {
       console.log('')
-      console.log('👟👟👟👟 Momentum Runner Activated 👟👟👟👟')
+      console.log('👟👟👟👟 Momentum Runner Ready 👟👟👟👟')
     }
   )
 }

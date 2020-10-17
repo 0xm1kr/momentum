@@ -4,6 +4,8 @@ import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
 import bn from 'big.js'
+import * as Redlock from 'redlock'
+
 import { AlgorithmEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, SubscriptionUpdateEvent, TradeEvent } from '@momentum/events'
 import { AlpacaService, Order, OrderSide } from '@momentum/alpaca-client'
 
@@ -32,12 +34,16 @@ export class AlpacaEMA1226Controller {
     // TODO move all of this to a service
     private MARGIN = 0.001
     private redis: Redis
+    private redlock: Redlock
     private activePairs: ActivePairs = {}
     private pendingOrder!: Order
 
     async onApplicationBootstrap() {
         // connect to store
         this.redis = this.redisSvc.getClient('momentum-state')
+
+        // set up redis lock
+        this.redlock = new Redlock([this.redis], { retryCount: 0 })
 
         // check for running algos
         const algos = await this.redis.keys('algorithms:ema1226:alpaca:*')
@@ -61,7 +67,16 @@ export class AlpacaEMA1226Controller {
     async handleUpdate(data: SubscriptionUpdateEvent) {
         if (!this.activePairs[data.pair]) return
 
-        /// check if pending order is updated
+        // lock while handling this event
+        let lock: Redlock.Lock
+        try {
+            lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 5000)
+        } catch(err){
+            console.log(`algorithms:ema1226:alpaca:${data.pair} locked...`)
+            return
+        }
+
+        // check if pending order is updated
         const order = data.orders[this.pendingOrder?.id]
         if (order) {
             this._checkPendingOrder(data.pair, order as Order)
@@ -154,6 +169,9 @@ export class AlpacaEMA1226Controller {
                 }
             }
         }
+
+        // unlock
+        lock.unlock()
     }
 
     /**

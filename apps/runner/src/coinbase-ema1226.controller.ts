@@ -3,8 +3,10 @@ import { ClientProxy, EventPattern } from '@nestjs/microservices'
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
-import { Order, OrderSide, TimeInForce } from 'coinbase-pro-node'
+import { CancelOrderPeriod, Order, OrderSide, TimeInForce } from 'coinbase-pro-node'
 import bn from 'big.js'
+import * as Redlock from 'redlock'
+
 import { AlgorithmEvent, SubscriptionUpdateEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
 import { CoinbaseService } from '@momentum/coinbase-client'
 
@@ -32,12 +34,16 @@ export class CoinbaseEMA1226Controller {
 
     private MARGIN = 0.006
     private redis: Redis
+    private redlock: Redlock
     private activePairs: ActivePairs = {}
     private pendingOrder!: Order
 
     async onApplicationBootstrap() {
         // connect to store
         this.redis = this.redisSvc.getClient('momentum-state')
+
+        // set up redis lock
+        this.redlock = new Redlock([this.redis], { retryCount: 0 })
 
         // check for running algos
         const algos = await this.redis.keys('algorithms:ema1226:coinbase:*')
@@ -60,6 +66,15 @@ export class CoinbaseEMA1226Controller {
     @EventPattern('update:coinbase')
     async handleUpdate(data: SubscriptionUpdateEvent) {
         if (!this.activePairs[data.pair]) return
+
+        // lock while handling this event
+        let lock: Redlock.Lock
+        try {
+            lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 5000)
+        } catch(err){
+            console.log(`algorithms:ema1226:alpaca:${data.pair} locked...`)
+            return
+        }
 
         // check if pending order is updated
         const order = data.orders[this.pendingOrder?.id]
@@ -111,8 +126,9 @@ export class CoinbaseEMA1226Controller {
                         side: OrderSide.SELL,
                         price: bestAsk[0],
                         time: new Date().getTime(),
-                        // TODO taker might be higher fees, but drastically simplifies partial fill logic
-                        timeInForce: TimeInForce.FILL_OR_KILL 
+                        // TODO partial fills?
+                        timeInForce: TimeInForce.GOOD_TILL_TIME,
+                        cancelAfter: CancelOrderPeriod.ONE_MINUTE
                     }
                     try {
                         // place order
@@ -145,25 +161,30 @@ export class CoinbaseEMA1226Controller {
                         side: OrderSide.BUY,
                         price: bestBid[0],
                         time: new Date().getTime(),
-                        // TODO taker might be higher fees, but drastically simplifies partial fill logic
-                        timeInForce: TimeInForce.FILL_OR_KILL 
+                        // TODO partial fills?
+                        timeInForce: TimeInForce.GOOD_TILL_TIME,
+                        cancelAfter: CancelOrderPeriod.ONE_MINUTE
                     }
                     try {
                         // place order
                         if (this.pendingOrder) return
-                        this.pendingOrder = await this.cbService.limitOrder(data.pair, order)
-                        console.log('Buy order placed!', this.pendingOrder)
+                        try {
+                            this.pendingOrder = await this.cbService.limitOrder(data.pair, order)
+                            console.log('Buy order placed!', this.pendingOrder)
+                        } catch(err) {
+                            console.error(err.response?.data?.message || err)
+                        }
                     } catch (err) {
                         console.log(err)
                     }
                 }
             }
         }
+
+        // unlock
+        lock.unlock()
     }
 
-    /**
-     * calculate 1min 12/26 moving average
-     */
     @EventPattern('clock:1m:coinbase')
     async handleOneMin(data: ClockEvent): Promise<void> {
         if (!this.activePairs[data.pair]) return
@@ -172,9 +193,6 @@ export class CoinbaseEMA1226Controller {
         }
     }
 
-    /**
-     * calculate 5min 12/26 moving average
-     */
     @EventPattern('clock:5m:coinbase')
     async handleFiveMin(data: ClockEvent): Promise<void> {
         if (!this.activePairs[data.pair]) return
@@ -183,9 +201,6 @@ export class CoinbaseEMA1226Controller {
         }
     }
 
-    /**
-     * calculate 15min 12/26 moving average
-     */
     @EventPattern('clock:15m:coinbase')
     async handleFifteenMin(data: ClockEvent): Promise<void> {
         if (!this.activePairs[data.pair]) return
@@ -194,19 +209,19 @@ export class CoinbaseEMA1226Controller {
         }
     }
 
-    @EventPattern('stop:ema1226:coinbase')
-    async handleStop(data: AlgorithmEvent) {
-        console.log('stopping', data.pair)
-        delete this.activePairs[data.pair]
-        await this.redis.del(`algorithms:ema1226:coinbase:${data.pair}`)
-    }
-
     @EventPattern('start:ema1226:coinbase')
     async handleStart(data: AlgorithmEvent) {
         // persist config
         await this.redis.hmset(`algorithms:ema1226:coinbase:${data.pair}`, { ...data })
         // start
         await this._start(data)
+    }
+
+    @EventPattern('stop:ema1226:coinbase')
+    async handleStop(data: AlgorithmEvent) {
+        console.log('stopping', data.pair)
+        delete this.activePairs[data.pair]
+        await this.redis.del(`algorithms:ema1226:coinbase:${data.pair}`)
     }
 
     /**
@@ -271,6 +286,8 @@ export class CoinbaseEMA1226Controller {
      */
     private async _checkPendingOrder(pair: string, order: Order) {
 
+        // TODO handle partial fill?
+        
         if (order.status === 'done') {
 
             // store / set trade
@@ -300,9 +317,6 @@ export class CoinbaseEMA1226Controller {
             if (this.pendingOrder?.id === order.id) {
                 this.pendingOrder = null
             }
-        } else {
-            // TODO handle partial fill?
-            console.log('PARTIAL FILL!', order.id, order.filled_size)
         }
     }
 
