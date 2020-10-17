@@ -2,7 +2,7 @@ import { Controller, Get, Inject } from '@nestjs/common'
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
 import { ClientProxy, EventPattern } from '@nestjs/microservices'
-import { ExchangeSubscriberService } from './provider/exchange-subscriber.service'
+import { AppService } from './app.service'
 
 
 @Controller('/subscriber')
@@ -10,7 +10,7 @@ export class AppController {
   constructor(
     @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
     private readonly redisSvc: RedisService,
-    private readonly exSubSvc: ExchangeSubscriberService
+    private readonly appSvc: AppService
   ) {}
   
   private redis: Redis
@@ -19,23 +19,13 @@ export class AppController {
     // connect to store
     this.redis = this.redisSvc.getClient('momentum-state')
 
-    // init existing cb subscriptions
-    const cbSubs = await this.redis.smembers('subscriptions:coinbase')
-    if (cbSubs.length) {
-      // subscribe
-      // TODO more efficient to handle all at once?
-      for(const s of cbSubs) {
-        await this.exSubSvc.subscribe(s, 'coinbase')
-      }
-    }
-
     // init existing alpaca subscriptions
     const alpSubs = await this.redis.smembers('subscriptions:alpaca')
     if (alpSubs.length) {
       // subscribe async
       // TODO more efficient to handle all at once?
       for(const s of alpSubs) {
-        await this.exSubSvc.subscribe(s, 'alpaca')
+        await this.appSvc.subscribe(s)
       }
     }
   }
@@ -43,29 +33,29 @@ export class AppController {
   @Get('/ping')
   async handlePing() {
       return {
-          pong: new Date().getTime(),
-          running: []
+          pong: new Date().getTime()
+          // TODO more data?
       }
   }
 
-  @EventPattern('subscribe')
+  @EventPattern('subscribe:alpaca')
   async createSubscription(createSub: {
     exchange: string
     pair: string
   }) {
     // add subscription
-    await this.exSubSvc.subscribe(createSub.pair, createSub.exchange)
+    await this.appSvc.subscribe(createSub.pair)
     // TODO emit event?
   }
 
-  @EventPattern('unsubscribe')
+  @EventPattern('unsubscribe:alpaca')
   async delSubscription(delSub: {
     exchange: string
     pair: string
   }) {
     // remove subscription
     // TODO await?
-    this.exSubSvc.unsubscribe(delSub.pair, delSub.exchange)
+    this.appSvc.unsubscribe(delSub.pair)
     // TODO emit event?
   }
 

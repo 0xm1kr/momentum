@@ -17,15 +17,6 @@
         "tsConfigPath": "apps/gateway/tsconfig.app.json"
       }
     },
-    "subscriber": {
-      "type": "application",
-      "root": "apps/subscriber",
-      "entryFile": "main",
-      "sourceRoot": "apps/subscriber/src",
-      "compilerOptions": {
-        "tsConfigPath": "apps/subscriber/tsconfig.app.json"
-      }
-    },
     "runner": {
       "type": "application",
       "root": "apps/runner",
@@ -44,13 +35,22 @@
         "tsConfigPath": "apps/analyzer/tsconfig.app.json"
       }
     },
-    "coinbase-client": {
-      "type": "library",
-      "root": "libs/coinbase-client",
-      "entryFile": "index",
-      "sourceRoot": "libs/coinbase-client/src",
+    "alpaca-subscriber": {
+      "type": "application",
+      "root": "apps/alpaca-subscriber",
+      "entryFile": "main",
+      "sourceRoot": "apps/alpaca-subscriber/src",
       "compilerOptions": {
-        "tsConfigPath": "libs/coinbase-client/tsconfig.lib.json"
+        "tsConfigPath": "apps/alpaca-subscriber/tsconfig.app.json"
+      }
+    },
+    "coinbase-subscriber": {
+      "type": "application",
+      "root": "apps/coinbase-subscriber",
+      "entryFile": "main",
+      "sourceRoot": "apps/coinbase-subscriber/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/coinbase-subscriber/tsconfig.app.json"
       }
     },
     "alpaca-client": {
@@ -62,6 +62,24 @@
         "tsConfigPath": "libs/alpaca-client/tsconfig.lib.json"
       }
     },
+    "alpaca": {
+      "type": "library",
+      "root": "libs/alpaca",
+      "entryFile": "index",
+      "sourceRoot": "libs/alpaca/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/alpaca/tsconfig.lib.json"
+      }
+    },
+    "coinbase-client": {
+      "type": "library",
+      "root": "libs/coinbase-client",
+      "entryFile": "index",
+      "sourceRoot": "libs/coinbase-client/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/coinbase-client/tsconfig.lib.json"
+      }
+    },
     "events": {
       "type": "library",
       "root": "libs/events",
@@ -71,13 +89,13 @@
         "tsConfigPath": "libs/events/tsconfig.lib.json"
       }
     },
-    "alpaca": {
+    "clock": {
       "type": "library",
-      "root": "libs/alpaca",
+      "root": "libs/clock",
       "entryFile": "index",
-      "sourceRoot": "libs/alpaca/src",
+      "sourceRoot": "libs/clock/src",
       "compilerOptions": {
-        "tsConfigPath": "libs/alpaca/tsconfig.lib.json"
+        "tsConfigPath": "libs/clock/tsconfig.lib.json"
       }
     }
   }

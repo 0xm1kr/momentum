@@ -36,6 +36,12 @@
       ],
       "@momentum/alpaca/*": [
         "libs/alpaca/src/*"
+      ],
+      "@momentum/clock": [
+        "libs/clock/src"
+      ],
+      "@momentum/clock/*": [
+        "libs/clock/src/*"
       ]
     }
   }

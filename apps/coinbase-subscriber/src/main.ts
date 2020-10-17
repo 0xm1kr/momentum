@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core'
+import { MicroserviceOptions, Transport } from '@nestjs/microservices'
 import { AppModule } from './app.module'
-import { Transport, MicroserviceOptions } from '@nestjs/microservices'
 
 async function bootstrap() {
   // Create redis transport
@@ -11,14 +11,14 @@ async function bootstrap() {
       db: '0'
     }
   })
-
+  
   // enable shutdown hook
   app.enableShutdownHooks();
   
   app.listen(
     () => {
       console.log('')
-      console.log('👟👟👟👟 Momentum Runner Ready 👟👟👟👟')
+      console.log('🔗🔗🔗🔗🔗  Coinbase Subscriber Ready 🔗🔗🔗🔗🔗')
     }
   )
 }
