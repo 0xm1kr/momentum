@@ -389,6 +389,10 @@ export class CoinbaseService {
     // connect
     const conn = await this.connection
 
+    if (this._subscriptionObservers[productId]) {
+      return this._subscriptionObservers[productId]
+    }
+
     // setup observable
     this._subscriptionObservers[productId] = new Subject<CoinbaseSubscription>()
 
@@ -534,7 +538,7 @@ export class CoinbaseService {
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
         this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
+        // console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
       }
     }
 
@@ -576,7 +580,7 @@ export class CoinbaseService {
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
         this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
+        // console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
       }
     }
     

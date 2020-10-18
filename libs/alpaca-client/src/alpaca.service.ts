@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common'
-import { Observable, Observer } from 'rxjs'
+import { Subject } from 'rxjs'
 import { AlpacaClient, AlpacaStream, PlaceOrder, Order, Clock, OrderSide, OrderStatus } from '@momentum/alpaca'
 import { RBTree } from 'bintrees'
 import { takeWhile } from 'rxjs/operators'
@@ -39,7 +39,7 @@ export type AlpacaSubscription = {
   lastUpdateProperty?: string // which property was updated
 }
 
-export type AlpacaSubscriptions = Record<string, Observable<AlpacaSubscription>>
+export type AlpacaSubscriptions = Record<string, Subject<AlpacaSubscription>>
 
 @Injectable()
 export class AlpacaService {
@@ -48,19 +48,21 @@ export class AlpacaService {
   protected _dataStream!: AlpacaStream
   protected _accountStream!: AlpacaStream
 
-
+  protected _heartbeatTimeout = 30000
   protected _clockCheckInterval = 30000
   protected _dataConnected = false
   protected _accountConnected = false
+  protected _heartbeat!: NodeJS.Timeout
+  protected _lastHeartBeat: number = null
   protected _clock!: AlpacaClock
-  protected _observableClock: Observable<AlpacaClock>
-  protected _observableSubscriptions: AlpacaSubscriptions = {}
+  protected _observableClock: Subject<AlpacaClock>
   protected _subscriptionMap: Record<string, AlpacaSubscription> = {}
-  protected _subscriptionObservers: Record<string, Observer<AlpacaSubscription>> = {}
+  protected _subscriptionObservers: Record<string, Subject<AlpacaSubscription>> = {}
 
   constructor() {
     this._client = new AlpacaClient({
       credentials: {
+        // TODO configurable
         key: process.env.PAPER_ALPACA_KEY,
         secret: process.env.PAPER_ALPACA_SECRET
       },
@@ -69,9 +71,9 @@ export class AlpacaService {
     })
   }
 
-  public get clock(): Promise<Observable<AlpacaClock>> {
+  public get clock(): Promise<AlpacaClock> {
     if (this._observableClock) {
-      return Promise.resolve(this._observableClock)
+      return Promise.resolve(this._clock)
     }
 
     return this._initClock()
@@ -94,7 +96,7 @@ export class AlpacaService {
   }
 
   public get subscriptions() {
-    return this._observableSubscriptions
+    return this._subscriptionObservers
   }
 
   /**
@@ -133,7 +135,7 @@ export class AlpacaService {
    * @param symbol 
    * @param params 
    */
-  public limitOrder(symbol: string, params: {
+  public async limitOrder(symbol: string, params: {
     size: number
     side: OrderSide
     price: number
@@ -165,7 +167,12 @@ export class AlpacaService {
       order.limit_price = params.price
     }
 
-    return this._client.placeOrder(order)
+    // place order
+    const placedOrder = await this._client.placeOrder(order)
+
+    // wait for order 
+    // to fill or fail
+    return this.awaitOrder(placedOrder)
   }
 
    /**
@@ -190,13 +197,12 @@ export class AlpacaService {
     return this._client.placeOrder(order)
   }
 
-
   /**
   * Subscribe to a symbol
   * 
   * @param symbol 
   */
-  public async subscribe(symbol: string): Promise<Observable<AlpacaSubscription>> {
+  public async subscribe(symbol: string): Promise<Subject<AlpacaSubscription>> {
     // get connection
     const conn = await this.connection
 
@@ -219,22 +225,22 @@ export class AlpacaService {
 
     // if markets are closed just resolve
     if (!this._clock?.isOpen) {
-      return Promise.resolve(this._observableSubscriptions[symbol])
+      return Promise.resolve(this._subscriptionObservers[symbol])
     }
 
     // wait for this subscription to become active
     return new Promise((res, rej) => {
-      this._observableSubscriptions[symbol]
-      .pipe(takeWhile(o => (!o.connected), true))  
-      .subscribe(o => {
-        if (o.connected) {
-          res()
-        }
-      })
+      this._subscriptionObservers[symbol]
+        .pipe(takeWhile(sub => (sub.connected.length !== subs.length), true))  
+        .subscribe(sub => {
+          if (sub.connected.length === subs.length) {
+            res()
+          }
+        }, rej)
     })
   }
 
-  /**
+ /**
   * Unsubscribe from a product
   * 
   * @param symbol 
@@ -248,7 +254,7 @@ export class AlpacaService {
 
       // remove data
       delete this._subscriptionMap[symbol]
-      delete this._observableSubscriptions[symbol]
+      delete this._subscriptionObservers[symbol]
       delete this._subscriptionObservers[symbol]
 
       // unsubscribe
@@ -268,29 +274,62 @@ export class AlpacaService {
     return true
   }
 
+  /**
+   * Check if an order is complete
+   * 
+   * @param order 
+   */
+  public orderComplete(order: Order) {
+    return ['filled','canceled','expired','stopped','rejected','suspended'].includes(order?.status)
+  }
+
+  /**
+   * Await an order
+   * 
+   * NOTE: only works when subscriber/runner
+   * are in the same microservice.
+   * 
+   * @param order 
+   */
+  public async awaitOrder(order: Order): Promise<Order> {
+    if (!this._subscriptionObservers[order.symbol]) {
+      return Promise.reject(`Not subscribed to ${order.symbol}`)
+    }
+    
+    return new Promise((res, rej) => {
+      this._subscriptionObservers[order.symbol]
+        .pipe(takeWhile(sub => (this.orderComplete(sub.orders[order.id])), true))
+        .subscribe(sub => {
+          if (this.orderComplete(sub.orders[order.id])) {
+            return res(sub.orders[order.id])
+          }
+      }, rej)
+    })
+  }
+
   // ------- internal methods --------
 
   /**
    * Get the Alpaca market clock
    */
-  protected async _initClock(): Promise<Observable<AlpacaClock>> {
+  protected async _initClock(): Promise<AlpacaClock> {
 
     // setup
     const result = await this._client.getClock()
-    this._clock = this._calculateClock(result)
-
+    
     // create observable
-    this._observableClock = new Observable(subject => {
-      subject.next(this._clock)
-      // TODO clear on error?
-      const intvl = setInterval((async () => {
-        const result = await this._client.getClock()
-        this._clock = this._calculateClock(result)
-        subject.next(this._clock)
-      }).bind(this), this._clockCheckInterval)
-    })
+    this._observableClock = new Subject()
+    this._clock = this._calculateClock(result)
+    this._observableClock.next(this._clock)
 
-    return this._observableClock
+    // TODO clear on error?
+    const intvl = setInterval((async () => {
+      const result = await this._client.getClock()
+      this._clock = this._calculateClock(result)
+      this._observableClock.next(this._clock)
+    }).bind(this), this._clockCheckInterval)
+
+    return this._clock
   }
 
   /**
@@ -425,8 +464,7 @@ export class AlpacaService {
         this._subscriptionMap[symbol].orders[message.order.id] = message.order     
         this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
         this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
-        // TODO this could cause dupes?
-        // this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
+        this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
         // console.log('ALPACA ORDER CREATED!', message.order)
       }
     }
@@ -460,13 +498,16 @@ export class AlpacaService {
    * 
    * @param symbol 
    */
-  protected async _createSubscriptionObserver(symbol: string): Promise<Observable<AlpacaSubscription>> {
+  protected async _createSubscriptionObserver(symbol: string): Promise<Subject<AlpacaSubscription>> {
     // connect
     const conn = await this.connection
 
-    if (this._observableSubscriptions[symbol]) {
-      return this._observableSubscriptions[symbol]
+    if (this._subscriptionObservers[symbol]) {
+      return this._subscriptionObservers[symbol]
     }
+
+    // setup observable
+    this._subscriptionObservers[symbol] = new Subject<AlpacaSubscription>()
 
     // init subscription
     this._subscriptionMap[symbol] = {
@@ -481,18 +522,7 @@ export class AlpacaService {
       orders: {}
     }
 
-    // setup observable
-    this._observableSubscriptions[symbol] = new Observable<AlpacaSubscription>(subject => {
-      this._subscriptionObservers[symbol] = subject
-
-      // setup unsubscribe function
-      // TODO what if this fails?
-      this._subscriptionMap[symbol].unsubscribe = function unsubscribe() {
-        subject.complete()
-      }
-    })
-
-    return this._observableSubscriptions[symbol]
+    return this._subscriptionObservers[symbol]
   }
 
   /**
@@ -504,12 +534,16 @@ export class AlpacaService {
     console.log('Alpaca connection established')
 
     // init clock
-    const clock = await this.clock
-    clock.subscribe((c) => {
+    await this._initClock()
+    
+    this._observableClock.subscribe((c) => {
       if (!c.isOpen) {
         console.log(`Alpaca markets closed, markets re-open in ${Math.round(c?.timeToOpen)}min`)
       }
     })
+
+    // init heartbeat
+    this._handleHeartBeat()
 
     // resolve
     this._dataConnected = true
@@ -526,9 +560,11 @@ export class AlpacaService {
   ) {
     // handle error
     if (message?.data?.error) {
-      console.error(`Alpaca socket error ${message?.data?.error}`)
-      return
+      throw new Error(`Alpaca socket error ${message?.data?.error}`)
     }
+
+    // heartbeat
+    this._handleHeartBeatMessage()
 
     // handle subscription listeners
     if (message?.data) {
@@ -645,6 +681,29 @@ export class AlpacaService {
     this._subscriptionMap[symbol].lastUpdateProperty = 'quote'
     this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
     this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
+  }
+
+  /**
+   * Set last message date
+   */
+  protected _handleHeartBeatMessage() {
+    this._lastHeartBeat = new Date().getTime()
+  }
+
+  /**
+   * handle heartbeat logic
+   */
+  protected _handleHeartBeat() {
+    const activeSubs = Object.keys(this._subscriptionMap)?.length
+    if (activeSubs && this._heartbeat && this._clock.isOpen) {
+      const now = new Date().getTime()
+      if ((now - this._lastHeartBeat) > this._heartbeatTimeout) {
+        throw new Error('Alpaca heartbeat timed out!')
+      }
+      this._heartbeat = setTimeout(this._handleHeartBeat.bind(this), this._heartbeatTimeout)
+    } else {
+      this._heartbeat = setTimeout(this._handleHeartBeat.bind(this), this._heartbeatTimeout)
+    }
   }
 
 }

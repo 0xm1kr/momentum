@@ -45,9 +45,7 @@ export class AppService {
   async subscribe(pair: string): Promise<Subscription> {
 
     // subscribe to pair
-    const sub = await this._subscribeToPair(pair)
-
-    console.log(sub)
+    await this._subscribeToPair(pair)
 
     // start clocks if not already running
     if (!this.clockSvc.clocks?.[pair]) {
@@ -170,8 +168,8 @@ export class AppService {
 
         // resolve on first
         subscription
-        .pipe(first())
-        .subscribe(res, rej)
+          .pipe(first())
+          .subscribe(res, rej)
 
       } catch (err) {
         rej(err)

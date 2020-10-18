@@ -44,7 +44,11 @@ export class AppController {
     pair: string
   }) {
     // add subscription
-    await this.appSvc.subscribe(createSub.pair)
+    try {
+      await this.appSvc.subscribe(createSub.pair)
+    } catch(err) {
+      console.error(err)
+    }
     // TODO emit event?
   }
 

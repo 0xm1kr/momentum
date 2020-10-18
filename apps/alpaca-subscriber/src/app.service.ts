@@ -13,7 +13,7 @@ import {
   ClockIntervalText,
   ClockInterval
 } from '@momentum/clock'
-import { Observable, interval } from 'rxjs'
+import { Subject, interval } from 'rxjs'
 import * as exchanges from './exchanges.json'
 
 export type Exchange = {
@@ -26,7 +26,7 @@ export type Exchange = {
   code?: string
 }
 
-export type Subscription = Observable<AlpacaSubscription>
+export type Subscription = Subject<AlpacaSubscription>
 export type Subscriptions = Record<string, Subscription>
 export type SupscriptionUpdates = Record<string, SubscriptionUpdateEvent[]>
 export type SubscriptionUpdateTimes = Record<string, number[]>
@@ -175,14 +175,13 @@ export class AppService {
   private _subscribeToPair(pair: string) {
     return new Promise(async (res, rej) => {
       try {
-        // TODO more than USD?
         const symbol = pair.split('-')[0]
         const subscription = await this.alpacaSvc.subscribe(symbol)
 
         // send updates
         subscription
           .pipe(throttle(() => interval(200)))
-          .subscribe(this._handleSubscriptionUpdate)
+          .subscribe(this._handleSubscriptionUpdate.bind(this))
 
         // resolve on first
         subscription

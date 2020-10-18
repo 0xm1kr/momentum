@@ -68,7 +68,7 @@ export class EMA1226Controller {
             // get a lock 
             const lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 1000)
             if (!lock) return
-        
+
             // get last trade
             const lastTrade = (await this.redis.hgetall(`trade:coinbase:ema1226:${data.pair}`) as unknown) as TradeEvent
 
@@ -159,7 +159,7 @@ export class EMA1226Controller {
             // release lock
             await lock.unlock()
 
-        } catch(err){
+        } catch (err) {
             console.log(err.message)
         }
     }
@@ -204,53 +204,6 @@ export class EMA1226Controller {
     }
 
     /**
-     * Start running an algo
-     * 
-     * @param data 
-     * @param restart 
-     */
-    private async _start(data: AlgorithmEvent) {
-        const startTime = new Date()
-
-        // set active
-        this.activePairs[data.pair] = {
-            pair: data.pair,
-            startTime: startTime.getTime(),
-            period: data.period,
-            size: data.size,
-            pricePeriods: [],
-            ema12: [],
-            ema26: [],
-        }
-
-        // init with previous trade
-        if (data.lastTrade) {
-            const lt = data.lastTrade.split(',')
-            const order = {
-                pair: data.pair,
-                side: lt[0],
-                size: data.size,
-                price: lt[1],
-                time: Number(lt[2]) || new Date().getTime(),
-                delta: '0',
-                exchange: 'coinbase'
-            }
-
-            // persist last trade
-            // NOTE: overwrites last trade!
-            await this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, order)
-        }
-
-        // log info
-        console.log(`COINBASE EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
-
-        // backfill price data
-        const period = ClockInterval[data.period]
-        const candles = await this.cbService.getCandles(data.pair, period / 1000)
-        this.activePairs[data.pair].pricePeriods = candles.map(c => (c.close))
-    }
-
-    /**
      * Handle a completed order
      * 
      * @param pair
@@ -285,7 +238,7 @@ export class EMA1226Controller {
             // partially filled but done (cancel/expire)
             // TODO 
         }
-        
+
     }
 
     /**
@@ -355,5 +308,53 @@ export class EMA1226Controller {
                 new Date().getTime()
             ))
         }
+    }
+
+    /**
+     * Start running an algo
+     * 
+     * @param data 
+     * @param restart 
+     */
+    private async _start(data: AlgorithmEvent) {
+        const startTime = new Date()
+
+        // set active
+        this.activePairs[data.pair] = {
+            pair: data.pair,
+            startTime: startTime.getTime(),
+            period: data.period,
+            size: data.size,
+            pricePeriods: [],
+            ema12: [],
+            ema26: [],
+        }
+
+        // init with previous trade
+        if (data.lastTrade) {
+            const lt = data.lastTrade.split(',')
+            const order = {
+                pair: data.pair,
+                side: lt[0],
+                size: data.size,
+                price: lt[1],
+                time: Number(lt[2]) || new Date().getTime(),
+                delta: '0',
+                exchange: 'coinbase',
+                id: ''
+            }
+
+            // persist last trade
+            // NOTE: overwrites last trade!
+            await this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, order)
+        }
+
+        // log info
+        console.log(`COINBASE EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
+
+        // backfill price data
+        const period = ClockInterval[data.period]
+        const candles = await this.cbService.getCandles(data.pair, period / 1000)
+        this.activePairs[data.pair].pricePeriods = candles.map(c => (c.close))
     }
 }
