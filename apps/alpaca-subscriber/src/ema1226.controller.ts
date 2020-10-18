@@ -59,6 +59,21 @@ export class EMA1226Controller {
         }
     }
 
+    @EventPattern('start:ema1226:alpaca')
+    async handleStart(data: AlgorithmEvent) {
+        // persist config
+        await this.redis.hmset(`algorithms:ema1226:alpaca:${data.pair}`, { ...data })
+        // start
+        await this._start(data)
+    }
+
+    @EventPattern('stop:ema1226:alpaca')
+    async handleStop(data: AlgorithmEvent) {
+        console.log('stopping', data.pair)
+        delete this.activePairs[data.pair]
+        await this.redis.del(`algorithms:ema1226:alpaca:${data.pair}`)
+    }
+
     @EventPattern('update:alpaca')
     async handleUpdate(data: SubscriptionUpdateEvent) {
         // no algo setup
@@ -185,21 +200,6 @@ export class EMA1226Controller {
         if (this.activePairs[data.pair].period === '15m') {
             this._calcMovingAvg(data, ClockIntervalText.FifteenMinute)
         }
-    }
-
-    @EventPattern('start:ema1226:alpaca')
-    async handleStart(data: AlgorithmEvent) {
-        // persist config
-        await this.redis.hmset(`algorithms:ema1226:alpaca:${data.pair}`, { ...data })
-        // start
-        await this._start(data)
-    }
-
-    @EventPattern('stop:ema1226:alpaca')
-    async handleStop(data: AlgorithmEvent) {
-        console.log('stopping', data.pair)
-        delete this.activePairs[data.pair]
-        await this.redis.del(`algorithms:ema1226:alpaca:${data.pair}`)
     }
 
     /**

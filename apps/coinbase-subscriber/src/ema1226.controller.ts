@@ -62,6 +62,21 @@ export class EMA1226Controller {
         }
     }
 
+    @EventPattern('start:ema1226:coinbase')
+    async handleStart(data: AlgorithmEvent) {
+        // persist config
+        await this.redis.hmset(`algorithms:ema1226:coinbase:${data.pair}`, { ...data })
+        // start
+        await this._start(data)
+    }
+
+    @EventPattern('stop:ema1226:coinbase')
+    async handleStop(data: AlgorithmEvent) {
+        console.log('stopping', data.pair)
+        delete this.activePairs[data.pair]
+        await this.redis.del(`algorithms:ema1226:coinbase:${data.pair}`)
+    }
+
     @EventPattern('update:coinbase')
     async handleUpdate(data: SubscriptionUpdateEvent) {
         if (!this.activePairs[data.pair]) return
@@ -188,21 +203,6 @@ export class EMA1226Controller {
         if (this.activePairs[data.pair].period === '15m') {
             this._calcMovingAvg(data, ClockIntervalText.FifteenMinute)
         }
-    }
-
-    @EventPattern('start:ema1226:coinbase')
-    async handleStart(data: AlgorithmEvent) {
-        // persist config
-        await this.redis.hmset(`algorithms:ema1226:coinbase:${data.pair}`, { ...data })
-        // start
-        await this._start(data)
-    }
-
-    @EventPattern('stop:ema1226:coinbase')
-    async handleStop(data: AlgorithmEvent) {
-        console.log('stopping', data.pair)
-        delete this.activePairs[data.pair]
-        await this.redis.del(`algorithms:ema1226:coinbase:${data.pair}`)
     }
 
     /**
