@@ -3,7 +3,7 @@ import { ClientProxy, EventPattern } from '@nestjs/microservices'
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
-import { CancelOrderPeriod, Order, OrderSide, TimeInForce } from 'coinbase-pro-node'
+import { Order, OrderSide, TimeInForce } from 'coinbase-pro-node'
 import bn from 'big.js'
 import * as Redlock from 'redlock'
 
@@ -23,7 +23,7 @@ export type AlgorithmData = {
 export type ActivePairs = Record<string, AlgorithmData>
 
 @Controller()
-export class CoinbaseEMA1226Controller {
+export class EMA1226Controller {
     constructor(
         @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
         private readonly redisSvc: RedisService,
@@ -34,9 +34,6 @@ export class CoinbaseEMA1226Controller {
     private redis: Redis
     private redlock: Redlock
     private activePairs: ActivePairs = {}
-
-    private pendingOrderResolver!: (value: Order) => void
-    private pendingOrder!: Order
 
     async onApplicationBootstrap() {
         // connect to store
@@ -67,132 +64,103 @@ export class CoinbaseEMA1226Controller {
     async handleUpdate(data: SubscriptionUpdateEvent) {
         if (!this.activePairs[data.pair]) return
 
-        // get last trade
-        const lastTrade = (await this.redis.hgetall(`trade:coinbase:ema1226:${data.pair}`) as unknown) as TradeEvent
+        try {
+            // get a lock 
+            const lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 1000)
+            if (!lock) return
         
-        // check for pending order updates
-        const order = (data.orders[this.pendingOrder?.id] as Order)
-        if (order) {
-            await this._checkPendingOrder(order, lastTrade)
-        }
+            // get last trade
+            const lastTrade = (await this.redis.hgetall(`trade:coinbase:ema1226:${data.pair}`) as unknown) as TradeEvent
 
-        // perform algo logic
-        if (this.activePairs[data.pair].ema26.length) {
+            // perform algo logic
+            if (this.activePairs[data.pair].ema26.length) {
 
-            // setup data
-            const bestAsk = data.bestAsk
-            const bestBid = data.bestBid
-            const ema12 = bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 1])
-            const ema26 = bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 1])
-            const ema12Slope = bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 1])
-                .minus(bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 2]))
-            const ema26Slope = bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 1])
-                .minus(bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 2]))
+                // setup data
+                const bestAsk = data.bestAsk
+                const bestBid = data.bestBid
+                const ema12 = bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 1])
+                const ema26 = bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 1])
+                const ema12Slope = bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 1])
+                    .minus(bn(this.activePairs[data.pair].ema12[this.activePairs[data.pair].ema12.length - 2]))
+                const ema26Slope = bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 1])
+                    .minus(bn(this.activePairs[data.pair].ema26[this.activePairs[data.pair].ema26.length - 2]))
 
-            // log data
-            console.log('-------------------------')
-            console.log('-----', data.pair, '-----')
-            console.log(`bestAsk ${data.bestAsk}`)
-            console.log(`bestBid ${data.bestBid}`)
-            console.log(`ema12 ${ema12}, ${ema12Slope}`)
-            console.log(`ema26 ${ema26}, ${ema26Slope}`)
-            console.log('-------------------------')
+                // log data
+                console.log('-------------------------')
+                console.log('-----', data.pair, '-----')
+                console.log(`bestAsk ${data.bestAsk}`)
+                console.log(`bestBid ${data.bestBid}`)
+                console.log(`ema12 ${ema12}, ${ema12Slope}`)
+                console.log(`ema26 ${ema26}, ${ema26Slope}`)
+                console.log('-------------------------')
 
-            // TODO auto calc available depth and fee
+                // TODO auto calc available depth and fee
 
-            // if the ema12 < ema26 
-            // and the price is > last buy+fee
-            // == short position (sell)
-            if (bn(ema12).lt(ema26)
-                && ema12Slope.lt(0)
-                && ema26Slope.lt(0)
-                && (lastTrade?.side !== 'sell')
-            ) {
-                const lastBuyPrice = lastTrade?.price || 0
-                const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
-                const curFee = bn(bestAsk[0]).times(0.001)
-                const reqPrice = lastTotal.plus(curFee)
-                console.log('required sell price:', reqPrice.toString())
-                if (lastTrade?.side === 'buy' && reqPrice.lt(bestAsk[0])) {
-
-                    // get a lock 
-                    let lock: Redlock.Lock
-                    try {
-                        lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 61000)
-                    } catch(err){
-                        console.log(`algorithms:ema1226:coinbase:${data.pair} locked...`)
-                        return
-                    }
-
-                    // place an order
-                    try {
-                        const completeOrder = await this._placeOrder({
-                            pair: data.pair,
+                // if the ema12 < ema26 
+                // and the price is > last buy+fee
+                // == short position (sell)
+                if (bn(ema12).lt(ema26)
+                    && ema12Slope.lt(0)
+                    && ema26Slope.lt(0)
+                    && (lastTrade?.side !== 'sell')
+                ) {
+                    const lastBuyPrice = lastTrade?.price || 0
+                    const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
+                    const curFee = bn(bestBid[0]).times(0.001)
+                    const reqPrice = lastTotal.plus(curFee)
+                    console.log('required sell price:', reqPrice.toString())
+                    if (lastTrade?.side === 'buy' && reqPrice.lte(bestBid[0])) {
+                        // place an order
+                        const completeOrder = await this.cbService.limitOrder(data.pair, {
                             size: this.activePairs[data.pair].size,
                             side: OrderSide.SELL,
-                            price: bestAsk[0],
-                            time: new Date().getTime(),
-                            // TODO partial fills?
-                            timeInForce: TimeInForce.GOOD_TILL_TIME,
-                            cancelAfter: CancelOrderPeriod.ONE_MINUTE
+                            price: bestBid[0],
+                            timeInForce: TimeInForce.FILL_OR_KILL
                         })
+                        // store order / notify
+                        await this._handleOrder(completeOrder)
+
                         console.log('Coinbase sell order', completeOrder)
-                    } catch(err) {
-                        console.error(err)
                     }
-
-                    // release lock
-                    await lock.unlock()
-
                 }
-            }
 
-            // if the ema12 > ema26
-            // and the price is < last sell-fee
-            // == long position (buy)
-            if (bn(ema12).gt(ema26)
-                && ema12Slope.gt(0)
-                && ema26Slope.gt(0)
-                && (lastTrade?.side !== 'buy')
-            ) {
-                const lastSellPrice = lastTrade?.price || 0
-                const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
-                const curFee = bn(bestBid[0]).times(0.001)
-                const reqPrice = lastTotal.minus(curFee)
+                // if the ema12 > ema26
+                // and the price is < last sell-fee
+                // == long position (buy)
+                if (bn(ema12).gt(ema26)
+                    && ema12Slope.gt(0)
+                    && ema26Slope.gt(0)
+                    && (lastTrade?.side !== 'buy')
+                ) {
+                    const lastSellPrice = lastTrade?.price || 0
+                    const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
+                    const curFee = bn(bestAsk[0]).times(0.001)
+                    const reqPrice = lastTotal.minus(curFee)
 
-                console.log('required buy price', reqPrice.toString())
-                if ((lastTrade?.side === 'sell' && bn(reqPrice).gt(bestBid[0]))) {
-                    // get a lock 
-                    let lock: Redlock.Lock
-                    try {
-                        lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 60000)
-                    } catch(err){
-                        console.log(`algorithms:ema1226:coinbase:${data.pair} locked...`)
-                        return
-                    }
+                    console.log('required buy price', reqPrice.toString())
+                    if ((lastTrade?.side === 'sell' && bn(reqPrice).gte(bestAsk[0]))) {
 
-                    // place an order
-                    try {
-                        const completeOrder = await this._placeOrder({
-                            pair: data.pair,
+                        // place an order
+                        const completeOrder = await this.cbService.limitOrder(data.pair, {
                             size: this.activePairs[data.pair].size,
                             side: OrderSide.BUY,
-                            price: bestBid[0],
-                            time: new Date().getTime(),
-                            // TODO partial fills?
-                            timeInForce: TimeInForce.GOOD_TILL_TIME,
-                            cancelAfter: CancelOrderPeriod.ONE_MINUTE
+                            price: bestAsk[0],
+                            timeInForce: TimeInForce.FILL_OR_KILL
                         })
+
+                        // store order / notify
+                        await this._handleOrder(completeOrder)
+
                         console.log('Coinbase buy order', completeOrder)
-                    } catch(err) {
-                        console.error(err)
                     }
-
-                    // release lock
-                    await lock.unlock()
-
                 }
             }
+
+            // release lock
+            await lock.unlock()
+
+        } catch(err){
+            console.log(err.message)
         }
     }
 
@@ -283,26 +251,12 @@ export class CoinbaseEMA1226Controller {
     }
 
     /**
-     * Place an order
-     * 
-     * @param order 
-     */
-    private async _placeOrder(order: any) {
-        return new Promise<Order>((resolve, reject) => {
-            this.pendingOrderResolver = resolve
-            this.cbService.limitOrder(order.pair, order)
-                .then(o => (this.pendingOrder = o))
-                .catch(err => (reject(err)))
-        })
-    }
-
-    /**
-     * Handle change to a placed order
+     * Handle a completed order
      * 
      * @param pair
      * @param order 
      */
-    private async _checkPendingOrder(order: Order, lastTrade?: TradeEvent) {
+    private async _handleOrder(order: Order, lastTrade?: TradeEvent) {
 
         console.log('CHECK ORDER', order)
 
@@ -319,7 +273,7 @@ export class CoinbaseEMA1226Controller {
                     price: order.price,
                     side: order.side,
                     delta: '0',
-                    time: new Date(order.created_at).getTime()
+                    time: new Date(order.done_at).getTime()
                 }
                 trade.delta = this._getTradeDelta(trade, lastTrade)
 
@@ -330,11 +284,6 @@ export class CoinbaseEMA1226Controller {
 
             // partially filled but done (cancel/expire)
             // TODO 
-
-            // clear pending order
-            this.pendingOrderResolver(order)
-            this.pendingOrderResolver = null
-            this.pendingOrder = null
         }
         
     }

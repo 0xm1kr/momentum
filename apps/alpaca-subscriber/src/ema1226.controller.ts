@@ -22,7 +22,7 @@ export type AlgorithmData = {
 export type ActivePairs = Record<string, AlgorithmData>
 
 @Controller()
-export class AlpacaEMA1226Controller {
+export class EMA1226Controller {
     constructor(
         @Inject('MOMENTUM_SERVICE') private readonly momentum: ClientProxy,
         private readonly redisSvc: RedisService,

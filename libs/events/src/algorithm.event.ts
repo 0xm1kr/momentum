@@ -6,7 +6,7 @@ export class AlgorithmEvent {
     exchange: string
     period: ClockIntervalText
     size: string
-    lastTrade: string // TODO change to starting trade?
+    lastTrade?: string // TODO change to starting trade?
 
     /**
      * Required params to start a new algo

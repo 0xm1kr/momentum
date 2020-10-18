@@ -6,6 +6,7 @@ import { AlpacaModule } from '@momentum/alpaca-client'
 import { AppService } from './app.service'
 import { ClockModule } from '@momentum/clock'
 import { AppController } from './app.controller'
+import { EMA1226Controller } from './ema1226.controller'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 require('events').EventEmitter.prototype._maxListeners = 100;
@@ -40,7 +41,8 @@ require('events').EventEmitter.prototype._maxListeners = 100;
     AppService
   ],
   controllers: [
-    AppController
+    AppController,
+    EMA1226Controller
   ]
 })
 export class AppModule {

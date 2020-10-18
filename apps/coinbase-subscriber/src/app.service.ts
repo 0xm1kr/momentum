@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ClientProxy } from '@nestjs/microservices'
-import { filter, throttle } from 'rxjs/operators'
+import { first, throttle } from 'rxjs/operators'
 import bn from 'big.js'
 import {
   CoinbaseService,
@@ -13,9 +13,9 @@ import {
   ClockIntervalText,
   ClockInterval
 } from '@momentum/clock'
-import { Observable, interval } from 'rxjs'
+import { Subject, interval } from 'rxjs'
 
-export type Subscription = Observable<CoinbaseSubscription>
+export type Subscription = Subject<CoinbaseSubscription>
 export type Subscriptions = Record<string, Subscription>
 export type SupscriptionUpdates = Record<string, SubscriptionUpdateEvent[]>
 export type SubscriptionUpdateTimes = Record<string, number[]>
@@ -45,7 +45,9 @@ export class AppService {
   async subscribe(pair: string): Promise<Subscription> {
 
     // subscribe to pair
-    await this._subscribeToPair(pair)
+    const sub = await this._subscribeToPair(pair)
+
+    console.log(sub)
 
     // start clocks if not already running
     if (!this.clockSvc.clocks?.[pair]) {
@@ -152,31 +154,28 @@ export class AppService {
 
   /**
    * Subscribe to coinbase 
-   * tickers and order books
+   * tickers and quotes
    * 
-   * @param pair
+   * @param pairs 
    */
-  private async _subscribeToPair(pair: string): Promise<Observable<CoinbaseSubscription>> {
+  private _subscribeToPair(pair: string) {
     return new Promise(async (res, rej) => {
-      let resolved = false
       try {
         const subscription = await this.coinbaseSvc.subscribe(pair)
+
+        // send updates
         subscription
-          // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
           .pipe(throttle(() => interval(200)))
-          .subscribe((sub) => {
-            // console.log(sub)
-            // setup handler
-            this._handleSubscriptionUpdate(sub)
-            // return once connected
-            if (sub.connected && !resolved) {
-              resolved = true
-              res(subscription)
-            }
-          }, rej)
-        } catch(err) {
-          rej(err)
-        }
+          .subscribe(this._handleSubscriptionUpdate.bind(this))
+
+        // resolve on first
+        subscription
+        .pipe(first())
+        .subscribe(res, rej)
+
+      } catch (err) {
+        rej(err)
+      }
     })
   }
 

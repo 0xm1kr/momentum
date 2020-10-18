@@ -40,9 +40,12 @@ export class AppController {
 
   @EventPattern('subscribe:coinbase')
   async createSubscription(pair: string) {
-    // add subscription
-    await this.appSvc.subscribe(pair)
-    // TODO emit event?
+    try {
+      // add subscription
+      await this.appSvc.subscribe(pair)
+    } catch(err) {
+      console.error(err)
+    }
   }
 
   @EventPattern('unsubscribe:coinbase')

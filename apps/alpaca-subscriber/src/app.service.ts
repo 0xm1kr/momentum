@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ClientProxy } from '@nestjs/microservices'
-import { filter, throttle } from 'rxjs/operators'
+import { throttle, first } from 'rxjs/operators'
 import bn from 'big.js'
 import {
   AlpacaService,
@@ -174,25 +174,21 @@ export class AppService {
    */
   private _subscribeToPair(pair: string) {
     return new Promise(async (res, rej) => {
-      let resolved = false
       try {
         // TODO more than USD?
         const symbol = pair.split('-')[0]
         const subscription = await this.alpacaSvc.subscribe(symbol)
 
-        // wait for subscription
+        // send updates
         subscription
-          // .pipe(filter(sub => (sub.lastUpdateProperty !== 'book')))
           .pipe(throttle(() => interval(200)))
-          .subscribe((sub) => {
-            // setup handler
-            this._handleSubscriptionUpdate(sub)
-            // return subscription
-            if (!resolved) {
-              resolved = true
-              res(subscription)
-            }
-          }, rej)
+          .subscribe(this._handleSubscriptionUpdate)
+
+        // resolve on first
+        subscription
+          .pipe(first())
+          .subscribe(res, rej)
+
       } catch (err) {
         rej(err)
       }

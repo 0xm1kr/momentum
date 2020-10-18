@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common'
 import { Observable, Observer } from 'rxjs'
 import { AlpacaClient, AlpacaStream, PlaceOrder, Order, Clock, OrderSide, OrderStatus } from '@momentum/alpaca'
 import { RBTree } from 'bintrees'
+import { takeWhile } from 'rxjs/operators'
 
 export {
   PlaceOrder,
@@ -223,9 +224,11 @@ export class AlpacaService {
 
     // wait for this subscription to become active
     return new Promise((res, rej) => {
-      this._observableSubscriptions[symbol].subscribe(o => {
+      this._observableSubscriptions[symbol]
+      .pipe(takeWhile(o => (!o.connected), true))  
+      .subscribe(o => {
         if (o.connected) {
-          res(this._observableSubscriptions[symbol])
+          res()
         }
       })
     })
