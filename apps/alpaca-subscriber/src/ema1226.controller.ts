@@ -29,7 +29,7 @@ export class EMA1226Controller {
         private readonly alpSvc: AlpacaService
     ) { }
 
-    private MARGIN = 0.006
+    private MARGIN = 0.001
     private redis: Redis
     private redlock: Redlock
     private activePairs: ActivePairs = {}
@@ -108,9 +108,7 @@ export class EMA1226Controller {
                     && (lastTrade?.side !== 'sell')
                 ) {
                     const lastBuyPrice = lastTrade?.price || 0
-                    const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
-                    const curFee = bn(bestBid[0]).times(0.001)
-                    const reqPrice = lastTotal.plus(curFee)
+                    const reqPrice = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
                     console.log('required sell price:', reqPrice.toString())
                     if (lastTrade?.side === 'buy' && reqPrice.lte(bestBid[0])) {
 
@@ -138,10 +136,7 @@ export class EMA1226Controller {
                     && (lastTrade?.side !== 'buy')
                 ) {
                     const lastSellPrice = lastTrade?.price || 0
-                    const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
-                    const curFee = bn(bestAsk[0]).times(0.001)
-                    const reqPrice = lastTotal.minus(curFee)
-
+                    const reqPrice = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
                     console.log('required buy price', reqPrice.toString())
                     if ((lastTrade?.side === 'sell' && bn(reqPrice).gte(bestAsk[0]))) {
 

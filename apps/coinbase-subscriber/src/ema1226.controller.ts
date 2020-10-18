@@ -30,7 +30,9 @@ export class EMA1226Controller {
         private readonly cbService: CoinbaseService
     ) { }
 
-    private MARGIN = 0.006
+    private MARGIN = 0.005
+    private FEE = 0.0025
+
     private redis: Redis
     private redlock: Redlock
     private activePairs: ActivePairs = {}
@@ -106,7 +108,7 @@ export class EMA1226Controller {
                 ) {
                     const lastBuyPrice = lastTrade?.price || 0
                     const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
-                    const curFee = bn(bestBid[0]).times(0.001)
+                    const curFee = bn(bestBid[0]).times(this.FEE)
                     const reqPrice = lastTotal.plus(curFee)
                     console.log('required sell price:', reqPrice.toString())
                     if (lastTrade?.side === 'buy' && reqPrice.lte(bestBid[0])) {
@@ -134,7 +136,7 @@ export class EMA1226Controller {
                 ) {
                     const lastSellPrice = lastTrade?.price || 0
                     const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
-                    const curFee = bn(bestAsk[0]).times(0.001)
+                    const curFee = bn(bestAsk[0]).times(this.FEE)
                     const reqPrice = lastTotal.minus(curFee)
 
                     console.log('required buy price', reqPrice.toString())
