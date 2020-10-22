@@ -65,7 +65,7 @@ export type Orders = Record<string, Order>
 export type CoinbaseSubscription = {
   productId: string
   connected: string[]
-  // unsubscribe?: () => void
+  unsubscribe?: () => void
   book: Book
   orders?: Orders
   ticker?: WebSocketTickerMessage
@@ -151,9 +151,13 @@ export class CoinbaseService {
     // place order
     const placedOrder = await this._client.rest.order.placeOrder(o)
 
-    // wait for order 
-    // to fill or fail
-    return this.awaitOrder(placedOrder) 
+    if (this._subscriptionMap[productId]) {
+      this._subscriptionMap[productId].orders[placedOrder.id] = placedOrder
+    }
+
+    // TODO wait for order 
+    // to fill or fail?
+    return placedOrder
   }
 
   /**
@@ -266,11 +270,7 @@ export class CoinbaseService {
 
     try {
       // unsubscribe
-      // this._subscriptionMap[productId]?.unsubscribe()
-      // remove data
-      delete this._subscriptionMap[productId]
-      delete this._subscriptionObservers[productId]
-      delete this._subscriptionObservers[productId]
+      this._subscriptionMap[productId]?.unsubscribe()
     } catch(err) {
       console.warn(err)
     }
@@ -409,7 +409,12 @@ export class CoinbaseService {
           (a, b) => (bn(a[0]).gt(bn(b[0])) ? 1 : (bn(a[0]).eq(bn(b[0])) ? 0 : -1))
         )
       },
-      orders: {}
+      orders: {},
+      unsubscribe: () => {
+        this._subscriptionObservers[productId].complete()
+        delete this._subscriptionObservers[productId]
+        delete this._subscriptionMap[productId]
+      }
     }
 
     return this._subscriptionObservers[productId]
@@ -531,14 +536,19 @@ export class CoinbaseService {
     if (message.type === WebSocketResponseType.FULL_RECEIVED) {
       const m = (message as any)
       const orderId = m.order_id
-
-      if (orderId) {
-        const o = await this.getOrder(orderId)
-        this._subscriptionMap[productId].orders[o.id] = o        
+      console.log(m)
+      if (orderId && !this._subscriptionMap[productId].orders[orderId]) {
+        this._subscriptionMap[productId].orders[orderId] = {
+          id: orderId,
+          size: m.size,
+          price: m.price,
+          side: m.side,
+          status: OrderStatus.PENDING
+        } as Order
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
         this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        // console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
+        console.log('COINBASE ORDER CREATED!', this._subscriptionMap[productId])
       }
     }
 
@@ -580,7 +590,7 @@ export class CoinbaseService {
         this._subscriptionMap[productId].lastUpdateProperty = 'orders'
         this._subscriptionMap[productId].lastUpdate = new Date().getTime()
         this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
-        // console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
+        console.log('COINBASE ORDER DONE!', this._subscriptionMap[productId])
       }
     }
     

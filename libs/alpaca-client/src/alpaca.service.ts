@@ -1,8 +1,17 @@
 import { Injectable } from '@nestjs/common'
 import { Subject } from 'rxjs'
-import { AlpacaClient, AlpacaStream, PlaceOrder, Order, Clock, OrderSide, OrderStatus } from '@momentum/alpaca'
-import { RBTree } from 'bintrees'
 import { takeWhile } from 'rxjs/operators'
+import { RBTree } from 'bintrees'
+import { 
+  AlpacaClient, 
+  AlpacaStream, 
+  PlaceOrder, 
+  Order, 
+  Clock, 
+  OrderSide, 
+  OrderStatus 
+} from '@momentum/alpaca'
+
 
 export {
   PlaceOrder,
@@ -45,6 +54,7 @@ export type AlpacaSubscriptions = Record<string, Subject<AlpacaSubscription>>
 export class AlpacaService {
 
   protected _client!: AlpacaClient
+  // protected _client2!: AlpacaClient
   protected _dataStream!: AlpacaStream
   protected _accountStream!: AlpacaStream
 
@@ -69,6 +79,15 @@ export class AlpacaService {
       paper: true
       // rate_limit: true
     })
+    // this._client2 = new AlpacaClient({
+    //   credentials: {
+    //     // TODO configurable
+    //     key: process.env.ALPACA_KEY,
+    //     secret: process.env.ALPACA_SECRET
+    //   },
+    //   paper: true
+    //   // rate_limit: true
+    // })
   }
 
   public get clock(): Promise<AlpacaClock> {
@@ -114,6 +133,7 @@ export class AlpacaService {
    * @param granularity 
    */
   public getBars(symbol: string, granularity: Granularity) {
+    // HACK: can't use sandbox to get data...
     return this._client.getBars({
       timeframe: granularity,
       symbols: [symbol]
@@ -170,9 +190,15 @@ export class AlpacaService {
     // place order
     const placedOrder = await this._client.placeOrder(order)
 
-    // wait for order 
+    if (this._subscriptionMap[symbol]) {
+      this._subscriptionMap[symbol].orders[placedOrder.id] = placedOrder
+    }
+
+    // TODO wait for order 
     // to fill or fail
-    return this.awaitOrder(placedOrder)
+    // return this.awaitOrder(placedOrder)
+
+    return placedOrder
   }
 
    /**
@@ -231,10 +257,10 @@ export class AlpacaService {
     // wait for this subscription to become active
     return new Promise((res, rej) => {
       this._subscriptionObservers[symbol]
-        .pipe(takeWhile(sub => (sub.connected.length !== subs.length), true))  
+        .pipe(takeWhile(sub => (sub.connected.length !== 2), true))  
         .subscribe(sub => {
-          if (sub.connected.length === subs.length) {
-            res()
+          if (sub.connected.length === 2) {
+            res(this.subscriptions[symbol])
           }
         }, rej)
     })
@@ -251,11 +277,6 @@ export class AlpacaService {
     try {
       // unsubscribe (complete observable)
       this._subscriptionMap[symbol]?.unsubscribe()
-
-      // remove data
-      delete this._subscriptionMap[symbol]
-      delete this._subscriptionObservers[symbol]
-      delete this._subscriptionObservers[symbol]
 
       // unsubscribe
       const subs = []
@@ -298,7 +319,7 @@ export class AlpacaService {
     
     return new Promise((res, rej) => {
       this._subscriptionObservers[order.symbol]
-        .pipe(takeWhile(sub => (this.orderComplete(sub.orders[order.id])), true))
+        .pipe(takeWhile(sub => (!this.orderComplete(sub.orders[order.id])), true))
         .subscribe(sub => {
           if (this.orderComplete(sub.orders[order.id])) {
             return res(sub.orders[order.id])
@@ -454,7 +475,7 @@ export class AlpacaService {
    */
   protected async _handleOrderUpdates(message: Record<string, any>) {
     const symbol = message.order?.symbol
-
+    
     // not listening to this book
     if (!symbol || !this._subscriptionMap[symbol]) return
 
@@ -519,7 +540,12 @@ export class AlpacaService {
         bids: new RBTree((a, b) => (a.p > b.p) ? 1 : (a.p === b.p) ? 0 : -1),
         asks: new RBTree((a, b) => (a.p > b.p) ? 1 : (a.p === b.p) ? 0 : -1),
       },
-      orders: {}
+      orders: {},
+      unsubscribe: () => {
+        this._subscriptionObservers[symbol].complete()
+        delete this._subscriptionObservers[symbol]
+        delete this._subscriptionMap[symbol]
+      }
     }
 
     return this._subscriptionObservers[symbol]

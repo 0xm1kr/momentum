@@ -39,13 +39,10 @@ export class AppController {
   }
 
   @EventPattern('subscribe:alpaca')
-  async createSubscription(createSub: {
-    exchange: string
-    pair: string
-  }) {
+  async createSubscription(pair: string) {
     // add subscription
     try {
-      await this.appSvc.subscribe(createSub.pair)
+      await this.appSvc.subscribe(pair)
     } catch(err) {
       console.error(err)
     }
@@ -53,13 +50,10 @@ export class AppController {
   }
 
   @EventPattern('unsubscribe:alpaca')
-  async delSubscription(delSub: {
-    exchange: string
-    pair: string
-  }) {
+  async delSubscription(pair: string) {
     // remove subscription
     // TODO await?
-    this.appSvc.unsubscribe(delSub.pair)
+    this.appSvc.unsubscribe(pair)
     // TODO emit event?
   }
 

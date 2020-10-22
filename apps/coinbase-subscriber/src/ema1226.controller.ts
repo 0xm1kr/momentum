@@ -9,6 +9,7 @@ import * as Redlock from 'redlock'
 
 import { AlgorithmEvent, SubscriptionUpdateEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
 import { CoinbaseService } from '@momentum/coinbase-client'
+import { last } from 'rxjs/operators'
 
 export type AlgorithmData = {
     pair: string
@@ -83,11 +84,20 @@ export class EMA1226Controller {
 
         try {
             // get a lock 
-            const lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 1000)
+            const lock = await this.redlock.lock(`lock:ema1226:coinbase:${data.pair}`, 1000)
             if (!lock) return
 
             // get last trade
             const lastTrade = (await this.redis.hgetall(`trade:coinbase:ema1226:${data.pair}`) as unknown) as TradeEvent
+            const pendingOrder = (await this.redis.hgetall(`pending:coinbase:ema1226:${data.pair}`) as unknown) as Order
+
+            // check pending logic
+            const order = data.orders[pendingOrder.id] as Order
+            if (order) {
+                await this._handlePendingOrder(order, lastTrade)
+                await lock.unlock()
+                return
+            }
 
             // perform algo logic
             if (this.activePairs[data.pair].ema26.length) {
@@ -125,19 +135,17 @@ export class EMA1226Controller {
                     const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
                     const curFee = bn(bestBid[0]).times(this.FEE)
                     const reqPrice = lastTotal.plus(curFee)
-                    console.log('required sell price:', reqPrice.toString())
+                    console.log('Required sell price:', reqPrice.toString())
                     if (lastTrade?.side === 'buy' && reqPrice.lte(bestBid[0])) {
                         // place an order
-                        const completeOrder = await this.cbService.limitOrder(data.pair, {
+                        const placedOrder = await this.cbService.limitOrder(data.pair, {
                             size: this.activePairs[data.pair].size,
                             side: OrderSide.SELL,
                             price: bestBid[0],
                             timeInForce: TimeInForce.FILL_OR_KILL
                         })
-                        // store order / notify
-                        await this._handleOrder(completeOrder)
-
-                        console.log('Coinbase sell order', completeOrder)
+                        await this.redis.hmset(`pending:coinbase:ema1226:${placedOrder.product_id}`, placedOrder as any)
+                        console.log(`Sell order placed`, placedOrder)
                     }
                 }
 
@@ -154,21 +162,17 @@ export class EMA1226Controller {
                     const curFee = bn(bestAsk[0]).times(this.FEE)
                     const reqPrice = lastTotal.minus(curFee)
 
-                    console.log('required buy price', reqPrice.toString())
+                    console.log('Required buy price', reqPrice.toString())
                     if ((lastTrade?.side === 'sell' && bn(reqPrice).gte(bestAsk[0]))) {
-
                         // place an order
-                        const completeOrder = await this.cbService.limitOrder(data.pair, {
+                        const placedOrder = await this.cbService.limitOrder(data.pair, {
                             size: this.activePairs[data.pair].size,
                             side: OrderSide.BUY,
                             price: bestAsk[0],
                             timeInForce: TimeInForce.FILL_OR_KILL
                         })
-
-                        // store order / notify
-                        await this._handleOrder(completeOrder)
-
-                        console.log('Coinbase buy order', completeOrder)
+                        await this.redis.hmset(`pending:coinbase:ema1226:${placedOrder.product_id}`, placedOrder as any)
+                        console.log(`Buy order placed`, placedOrder)
                     }
                 }
             }
@@ -211,7 +215,7 @@ export class EMA1226Controller {
      * @param pair
      * @param order 
      */
-    private async _handleOrder(order: Order, lastTrade?: TradeEvent) {
+    private async _handlePendingOrder(order: Order, lastTrade?: TradeEvent) {
 
         console.log('CHECK ORDER', order)
 
@@ -234,7 +238,9 @@ export class EMA1226Controller {
 
                 // TODO array?
                 await this.redis.hmset(`trade:coinbase:ema1226:${order.product_id}`, trade as any)
+                await this.redis.del(`pending:coinbase:ema1226:${order.product_id}`)
                 this.momentum.emit('trade:coinbase', trade)
+                console.log('Coinbase order', trade)
             }
 
             // partially filled but done (cancel/expire)

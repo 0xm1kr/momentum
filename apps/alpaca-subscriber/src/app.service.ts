@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common'
 import { ClientProxy } from '@nestjs/microservices'
+import { Subject, interval } from 'rxjs'
 import { throttle, first } from 'rxjs/operators'
 import bn from 'big.js'
 import {
@@ -13,7 +14,6 @@ import {
   ClockIntervalText,
   ClockInterval
 } from '@momentum/clock'
-import { Subject, interval } from 'rxjs'
 import * as exchanges from './exchanges.json'
 
 export type Exchange = {
@@ -210,7 +210,7 @@ export class AppService {
     // check ticker update is unique
     // TODO more than USD?
     const pair = `${update.symbol}-USD`
-    const lastUpdate = this.updates['alpaca'][pair]?.[0]
+    const lastUpdate = this.updates[pair]?.[0]
     const changed = lastUpdate ? (String(lastUpdate?.lastTrade?.id) !== String(update.ticker?.i)) : false
     const lastTrade: Trade = changed ? {
       id: String(update.ticker?.i),

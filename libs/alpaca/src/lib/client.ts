@@ -330,7 +330,7 @@ export class AlpacaClient {
       if (this.options.rate_limit) {
         await new Promise((resolve) => this.limiter.removeTokens(1, resolve))
       }
-
+      
       await fetch(`${url}/${endpoint}`, {
         method: method,
         headers: {

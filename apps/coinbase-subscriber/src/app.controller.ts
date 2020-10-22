@@ -25,7 +25,7 @@ export class AppController {
       // subscribe
       // TODO more efficient to handle all at once?
       for(const s of cbSubs) {
-        await this.appSvc.subscribe(s)
+        this.appSvc.subscribe(s)
       }
     }
   }
