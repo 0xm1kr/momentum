@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common'
+import { InjectTwilio, TwilioClient } from 'nestjs-twilio'
 import axios from 'axios'
 
 const ELK_USER = process.env.ELK_USER || 'elastic'
@@ -8,6 +9,10 @@ const ELK_PASS = process.env.ELK_PASS || 'changeme'
 export class AppService {
 
     private elkEndpoint = 'http://localhost:9200'
+
+    constructor(
+        @InjectTwilio() private readonly twilio: TwilioClient
+    ) {}
     
     /**
      * Create an index
@@ -56,4 +61,22 @@ export class AppService {
             }
         })
     }
+
+    /**
+     * Send a text message
+     * 
+     * @param message 
+     * @param to 
+     */
+    async sendSMS(message: string, to: string) {
+        try {
+            return await this.twilio.messages.create({
+                body: message,
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to
+            })
+        } catch (e) {
+          console.log(e)
+        }
+      }
 }

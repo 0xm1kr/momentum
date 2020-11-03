@@ -20,7 +20,7 @@ import {
   FeeUtil,
   FeeEstimate,
   CandleGranularity,
-  Candle, WebSocketSubscription, WebSocketErrorMessage, TimeInForce, FilledOrder, CancelOrderPeriod, AutoCancelLimitOrder
+  Candle, WebSocketSubscription, WebSocketErrorMessage, TimeInForce, FilledOrder, CancelOrderPeriod, AutoCancelLimitOrder, PendingOrder
 } from 'coinbase-pro-node'
 import { RBTree } from 'bintrees'
 import { Observable, Subject } from 'rxjs'
@@ -253,6 +253,7 @@ export class CoinbaseService {
       this._subscriptionObservers[productId]
         .pipe(takeWhile(sub => (sub.connected.length < 3), true))
         .subscribe((sub) => {
+          console.log(sub.productId, sub.connected)
           if (sub.connected.length === 3) {
             res(this.subscriptions[productId])
           }
@@ -516,6 +517,7 @@ export class CoinbaseService {
 
     // handle order updates
     if (message.type === WebSocketResponseType.FULL_RECEIVED
+      || message.type === WebSocketResponseType.FULL_OPEN
       || message.type === WebSocketResponseType.LAST_MATCH 
       || message.type === WebSocketResponseType.FULL_DONE) {
       this._handleSubscriptionOrderMessage(message)
@@ -533,7 +535,7 @@ export class CoinbaseService {
     const productId = (message as any).product_id
 
     // order created/placed by us (TODO validate profile_id?)
-    if (message.type === WebSocketResponseType.FULL_RECEIVED) {
+    if (['received','open'].includes(message.type)) {
       const m = (message as any)
       const orderId = m.order_id
       console.log(m)
@@ -555,8 +557,21 @@ export class CoinbaseService {
     // order matches
     if (message.type === WebSocketResponseType.LAST_MATCH) {
       const m = (message as WebSocketMatchMessage)
-      // const o = this._subscriptionMap[productId].orders[m.product_id]
-      // console.log('COINBASE ORDER MATCH!', m)
+      const o = (this._subscriptionMap[productId].orders[m.maker_order_id] 
+                || this._subscriptionMap[productId].orders[m.taker_order_id])
+      
+      if (o) {
+        // calculate filled average price
+        // TODO
+        
+        // update order with filled data
+        o.filled_size = bn(o.filled_size).plus(m.size).toString()
+        this._subscriptionMap[productId].orders[o.id] = o
+        this._subscriptionMap[productId].lastUpdateProperty = 'orders'
+        this._subscriptionMap[productId].lastUpdate = new Date().getTime()
+        this._subscriptionObservers[productId].next(this._subscriptionMap[productId])
+        console.log('COINBASE ORDER MATCH!', m)
+      }
       // TODO handle partial fills?
     }
 

@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common'
 import { Transport, ClientsModule } from '@nestjs/microservices'
-import { RedisModule} from 'nestjs-redis'
 import { ConfigModule } from '@nestjs/config'
+import { RedisModule} from 'nestjs-redis'
 import { CoinbaseModule } from '@momentum/coinbase-client'
 import { ClockModule } from '@momentum/clock'
 import { AppService } from './app.service'

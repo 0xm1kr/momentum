@@ -33,6 +33,7 @@
     "limiter": "^1.1.5",
     "moving-averages": "^4.0.5",
     "nestjs-redis": "^1.2.8",
+    "nestjs-twilio": "^1.0.1",
     "reconnecting-websocket": "^4.4.0",
     "redis": "^3.0.2",
     "redlock": "^4.2.0",

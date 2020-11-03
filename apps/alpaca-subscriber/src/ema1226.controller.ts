@@ -47,13 +47,10 @@ export class EMA1226Controller {
             for (const a of algos) {
                 const params = await this.redis.hgetall(a) as unknown
                 console.log('params', params)
-                const lastTrade = await this.redis.hgetall(`trade:alpaca:ema1226:${(params as AlgorithmEvent).pair}`)
-                console.log('lastTrade', lastTrade)
                 this._start({
                     ...params as AlgorithmEvent,
-                    lastTrade: Object.keys(lastTrade).length
-                        ? `${lastTrade.side},${lastTrade.price},${lastTrade.time}`
-                        : (params as AlgorithmEvent).lastTrade
+                    // do not pass initial params lastTrade again
+                    lastTrade: null
                 })
             }
         }
@@ -84,7 +81,7 @@ export class EMA1226Controller {
 
         try {
             // get a lock 
-            const lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 20000)
+            const lock = await this.redlock.lock(`lock:ema1226:alpaca:${data.pair}`, 30000)
             if (!lock) return
 
             // get last trade
@@ -228,10 +225,10 @@ export class EMA1226Controller {
             trade.delta = this._getTradeDelta(trade, lastTrade)
 
              // TODO array?
-             await this.redis.hmset(`trade:alpaca:ema1226:${order.symbol}-USD`, trade as any)
-             await this.redis.del(`pending:alpaca:ema1226:${order.symbol}-USD`)
+             await this.redis.hmset(`trade:alpaca:ema1226:${trade.pair}`, trade as any)
+             await this.redis.del(`pending:alpaca:ema1226:${trade.pair}`)
              this.momentum.emit('trade:alpaca', trade)
-             console.log('Alpaca order', trade)
+             console.log('Alpaca trade!', trade)
         }
         
         // partially filled but done (cancel/expire)
@@ -349,8 +346,20 @@ export class EMA1226Controller {
             await this.redis.hmset(`trade:alpaca:ema1226:${data.pair}`, order)
         }
 
+        // get last trade
+        const lastTrade = (await this.redis.hgetall(`trade:alpaca:ema1226:${data.pair}`) as unknown) as TradeEvent
+        const pendingOrder = (await this.redis.hgetall(`pending:alpaca:ema1226:${data.pair}`) as unknown) as Order
+
+        // handle potential incomplete pending order
+        if (pendingOrder?.id) {
+            const order = await this.alpSvc.getOrder(pendingOrder.id)
+            if (order) {
+                await this._handlePendingOrder(order, lastTrade)
+            }
+        }
+
         // log info
-        console.log(`ALPACA EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2), data.lastTrade)
+        console.log(`ALPACA EMA 12 / 26: ${startTime.toISOString()}`, this.activePairs[data.pair], lastTrade)
 
         // backfill price data
         // TODO more than USD?

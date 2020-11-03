@@ -79,15 +79,6 @@ export class AlpacaService {
       paper: true
       // rate_limit: true
     })
-    // this._client2 = new AlpacaClient({
-    //   credentials: {
-    //     // TODO configurable
-    //     key: process.env.ALPACA_KEY,
-    //     secret: process.env.ALPACA_SECRET
-    //   },
-    //   paper: true
-    //   // rate_limit: true
-    // })
   }
 
   public get clock(): Promise<AlpacaClock> {
@@ -481,12 +472,12 @@ export class AlpacaService {
 
     // new order Created
     if (message.event === 'new') {
-      if (message.order) {
+      if (message.order && !this._subscriptionMap[symbol].orders[message.order.id]) {
         this._subscriptionMap[symbol].orders[message.order.id] = message.order     
         this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
         this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
         this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
-        // console.log('ALPACA ORDER CREATED!', message.order)
+        console.log('ALPACA ORDER CREATED!', message.order)
       }
     }
 
@@ -509,7 +500,7 @@ export class AlpacaService {
         this._subscriptionMap[symbol].lastUpdateProperty = 'orders'
         this._subscriptionMap[symbol].lastUpdate = new Date().getTime()
         this._subscriptionObservers[symbol].next(this._subscriptionMap[symbol])
-        // console.log('ALPACA ORDER UPDATED!', message.order)
+        console.log('ALPACA ORDER UPDATED!', message.order)
       }
     }
   }

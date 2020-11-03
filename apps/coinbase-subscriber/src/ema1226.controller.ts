@@ -3,13 +3,12 @@ import { ClientProxy, EventPattern } from '@nestjs/microservices'
 import { RedisService } from 'nestjs-redis'
 import { Redis } from 'ioredis'
 import { ema } from 'moving-averages'
-import { Order, OrderSide, TimeInForce } from 'coinbase-pro-node'
+import { CancelOrderPeriod, Order, OrderSide, TimeInForce } from 'coinbase-pro-node'
 import bn from 'big.js'
 import * as Redlock from 'redlock'
 
 import { AlgorithmEvent, SubscriptionUpdateEvent, ClockEvent, ClockInterval, ClockIntervalText, EMAEvent, TradeEvent } from '@momentum/events'
 import { CoinbaseService } from '@momentum/coinbase-client'
-import { last } from 'rxjs/operators'
 
 export type AlgorithmData = {
     pair: string
@@ -51,13 +50,10 @@ export class EMA1226Controller {
             for (const a of algos) {
                 const params = await this.redis.hgetall(a) as unknown
                 console.log('params', params)
-                const lastTrade = await this.redis.hgetall(`trade:coinbase:ema1226:${(params as AlgorithmEvent).pair}`)
-                console.log('lastTrade', lastTrade)
                 this._start({
                     ...params as AlgorithmEvent,
-                    lastTrade: Object.keys(lastTrade).length
-                        ? `${lastTrade.side},${lastTrade.price},${lastTrade.time}`
-                        : (params as AlgorithmEvent).lastTrade
+                    // do not pass initial params lastTrade again
+                    lastTrade: null
                 })
             }
         }
@@ -84,7 +80,7 @@ export class EMA1226Controller {
 
         try {
             // get a lock 
-            const lock = await this.redlock.lock(`lock:ema1226:coinbase:${data.pair}`, 1000)
+            const lock = await this.redlock.lock(`lock:ema1226:coinbase:${data.pair}`, 30000)
             if (!lock) return
 
             // get last trade
@@ -133,16 +129,17 @@ export class EMA1226Controller {
                 ) {
                     const lastBuyPrice = lastTrade?.price || 0
                     const lastTotal = bn(lastBuyPrice).plus((bn(lastBuyPrice).times(this.MARGIN)))
-                    const curFee = bn(bestBid[0]).times(this.FEE)
+                    const curFee = bn(bestAsk[0]).times(this.FEE)
                     const reqPrice = lastTotal.plus(curFee)
                     console.log('Required sell price:', reqPrice.toString())
-                    if (lastTrade?.side === 'buy' && reqPrice.lte(bestBid[0])) {
+                    if (lastTrade?.side === 'buy' && reqPrice.lte(bestAsk[0])) {
                         // place an order
                         const placedOrder = await this.cbService.limitOrder(data.pair, {
                             size: this.activePairs[data.pair].size,
                             side: OrderSide.SELL,
-                            price: bestBid[0],
-                            timeInForce: TimeInForce.FILL_OR_KILL
+                            price: bestAsk[0],
+                            timeInForce: TimeInForce.GOOD_TILL_TIME,
+                            cancelAfter: CancelOrderPeriod.ONE_MINUTE
                         })
                         await this.redis.hmset(`pending:coinbase:ema1226:${placedOrder.product_id}`, placedOrder as any)
                         console.log(`Sell order placed`, placedOrder)
@@ -158,18 +155,20 @@ export class EMA1226Controller {
                     && (lastTrade?.side !== 'buy')
                 ) {
                     const lastSellPrice = lastTrade?.price || 0
-                    const lastTotal = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.MARGIN)))
-                    const curFee = bn(bestAsk[0]).times(this.FEE)
-                    const reqPrice = lastTotal.minus(curFee)
+                    // NOTE: "long" (only make up for fee)
+                    const reqPrice = bn(lastSellPrice).minus((bn(lastSellPrice).times(this.FEE)))
+                    // const curFee = bn(bestAsk[0]).times(this.FEE)
+                    // const reqPrice = lastTotal.minus(curFee)
 
                     console.log('Required buy price', reqPrice.toString())
-                    if ((lastTrade?.side === 'sell' && bn(reqPrice).gte(bestAsk[0]))) {
+                    if ((lastTrade?.side === 'sell' && bn(reqPrice).gte(bestBid[0]))) {
                         // place an order
                         const placedOrder = await this.cbService.limitOrder(data.pair, {
                             size: this.activePairs[data.pair].size,
                             side: OrderSide.BUY,
-                            price: bestAsk[0],
-                            timeInForce: TimeInForce.FILL_OR_KILL
+                            price: bestBid[0],
+                            timeInForce: TimeInForce.GOOD_TILL_TIME,
+                            cancelAfter: CancelOrderPeriod.ONE_MINUTE
                         })
                         await this.redis.hmset(`pending:coinbase:ema1226:${placedOrder.product_id}`, placedOrder as any)
                         console.log(`Buy order placed`, placedOrder)
@@ -240,11 +239,18 @@ export class EMA1226Controller {
                 await this.redis.hmset(`trade:coinbase:ema1226:${order.product_id}`, trade as any)
                 await this.redis.del(`pending:coinbase:ema1226:${order.product_id}`)
                 this.momentum.emit('trade:coinbase', trade)
-                console.log('Coinbase order', trade)
+                console.log('Coinbase trade!', trade)
             }
 
             // partially filled but done (cancel/expire)
-            // TODO 
+            if ((order as any).done_reason === 'canceled') {
+                if (bn(order.filled_size).eq(0)) {
+                    await this.redis.del(`pending:coinbase:ema1226:${order.product_id}`)
+                } else {
+                    console.log('Partial fill!!', order)
+                }
+            }
+            
         }
 
     }
@@ -271,6 +277,7 @@ export class EMA1226Controller {
 
     /**
      * Calculate moving avg
+     * 
      * @param data 
      */
     private _calcMovingAvg(data: ClockEvent, period: ClockIntervalText) {
@@ -338,7 +345,7 @@ export class EMA1226Controller {
             ema26: [],
         }
 
-        // init with previous trade
+        // init with algo data
         if (data.lastTrade) {
             const lt = data.lastTrade.split(',')
             const order = {
@@ -357,8 +364,20 @@ export class EMA1226Controller {
             await this.redis.hmset(`trade:coinbase:ema1226:${data.pair}`, order)
         }
 
+        // get last trade
+        const lastTrade = (await this.redis.hgetall(`trade:coinbase:ema1226:${data.pair}`) as unknown) as TradeEvent
+        const pendingOrder = (await this.redis.hgetall(`pending:coinbase:ema1226:${data.pair}`) as unknown) as Order
+
+        // handle potential incomplete pending order
+        if (pendingOrder?.id) {
+            const order = await this.cbService.getOrder(pendingOrder.id)
+            if (order) {
+                await this._handlePendingOrder(order, lastTrade)
+            }
+        }
+
         // log info
-        console.log(`COINBASE EMA 12 / 26: ${startTime.toISOString()}`, JSON.stringify(this.activePairs[data.pair], null, 2))
+        console.log(`COINBASE EMA 12 / 26: ${startTime.toISOString()}`, this.activePairs[data.pair], lastTrade)
 
         // backfill price data
         const period = ClockInterval[data.period]

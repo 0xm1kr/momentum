@@ -122,6 +122,22 @@ export class AppController {
       delta: Number(data.delta),
       time: data.time
     })
+    this._sendTradeSMS(data)
+  }
+
+  /**
+   * Send Trade sms
+   */
+  private async _sendTradeSMS(trade: TradeEvent) {
+    const mssg = `Money! ${trade.pair} $${trade.delta}`
+
+    if (trade.exchange === 'coinbase') {
+      this.appSvc.sendSMS(mssg, '+19703101995')
+      this.appSvc.sendSMS(mssg, '+17206295896')
+    } else {
+      this.appSvc.sendSMS(mssg, '+19703101995')
+    }
+   
   }
 
 }
